@@ -29,6 +29,32 @@ import {
 afterEach(cleanupAll)
 
 describe('工作流 bundle 导出/导入（mode1）', () => {
+  it('responsibility 可选字段在保存、导出与导入中往返；旧节点无需该字段', async () => {
+    const store = await makeStore()
+    const flow = makeFlow()
+    const responsibleNode = flow.nodes.find((node) => node.id === 'n-a1')
+    if (responsibleNode?.kind === 'agent') {
+      responsibleNode.data.responsibility = {
+        planningId: 'plan-review', id: 'R1', purpose: '检索资料', deliverable: '资料列表', requirementRefs: ['检索文献'],
+      }
+    }
+    await store.saveWorkflow(flow, 'session-1', { force: true })
+
+    const json = await exportWorkflowBundle(store, 'session-1', 'flow-1')
+    const exported = JSON.parse(json) as { workflow?: { nodes?: Array<{ id?: string; data?: Record<string, unknown> }> } }
+    expect(exported.workflow?.nodes?.find((node) => node.id === 'n-a1')?.data?.responsibility).toEqual({
+      planningId: 'plan-review', id: 'R1', purpose: '检索资料', deliverable: '资料列表', requirementRefs: ['检索文献'],
+    })
+    expect(exported.workflow?.nodes?.find((node) => node.id === 'n-a2')?.data).not.toHaveProperty('responsibility')
+
+    await importWorkflowBundle(store, json)
+    const imported = (await store.listFlowTemplates()).find((template) => template.name === '测试流程')
+    expect(imported?.nodes.find((node) => node.id === 'n-a1')?.data).toMatchObject({
+      responsibility: { planningId: 'plan-review', id: 'R1', purpose: '检索资料' },
+    })
+    expect(imported?.nodes.find((node) => node.id === 'n-a2')?.data).not.toHaveProperty('responsibility')
+  })
+
   it('导出为 v2 bundle；冲突返回 conflict，rename 新建、overwrite 覆盖', async () => {
     const store = await makeStore()
     await store.saveWorkflow(makeFlow(), 'session-1', { force: true })

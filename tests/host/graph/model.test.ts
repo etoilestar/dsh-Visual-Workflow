@@ -15,6 +15,7 @@ import {
   ctxInEdges,
   dbInEdges,
   entryNodes,
+  findNodeByResponsibilityId,
   flowOutEdges,
   flowInEdges,
   isFlowLine,
@@ -245,6 +246,16 @@ describe('闸门标记目标归一化（mainNodeIdOf）', () => {
 })
 
 describe('责任标识局部修图范围（responsibilityRepairScopeOf）', () => {
+  it('findNodeByResponsibilityId 返回 nodeId、节点 data 与责任元数据', () => {
+    const screen = newRoleNode('agent', 'screen')
+    screen.id = 'screen'
+    screen.data.responsibility = { planningId: 'plan-1', id: 'R-screen', purpose: '筛选证据', deliverable: '证据表' }
+    const lookup = findNodeByResponsibilityId(makeFlow([screen], []), ' R-screen ')
+    expect(lookup?.nodeId).toBe('screen')
+    expect(lookup?.nodeData).toBe(screen.data)
+    expect(lookup?.responsibility).toEqual(screen.data.responsibility)
+  })
+
   it('只返回目标节点和直接上下游连线，不包含无关节点与连线', () => {
     const search = newRoleNode('agent', 'search')
     const screen = newRoleNode('agent', 'screen')

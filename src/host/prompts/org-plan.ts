@@ -122,7 +122,7 @@ const PRE_SUBMIT_CHECKLIST = [
   '提交前自检（逐条确认，任一不成立就先补齐再提交）：',
   '- 职责分析：写图前先在本轮规划内部生成一次轻量中间结构 {planningId, responsibilities:[{id,purpose,deliverable,requirementRefs}]}；它只用于需求拆解，不落成独立节点、连线或责任图。',
   '- 职责映射：再为每项 responsibility 创建或复用一个 agent/group，把同一 planningId 与 {id,purpose,deliverable,requirementRefs} 写入 node.data.responsibility，形成用户需求 → planningId → responsibility → node 的追踪链。',
-  '- 职责边界：检查 purpose 是否缺失或重叠、deliverable 是否明确、用户目标是否由 requirementRefs 可追踪；问题只通过现有工作流节点修正。',
+  '- 职责边界：检查 purpose 是否缺失或重叠、deliverable 是否明确；把用户意图拆成主要目标，并确认每个主要目标至少出现在一项 responsibility.requirementRefs 中。问题只通过现有工作流节点修正，不创建 requirement graph。',
   '- 交付物清单：每份交付物都有对应节点，且节点之间没有重复职责。',
   '- 落盘路径与消费方：每份交付物写明写到哪个文件，以及谁会读它；没有消费方的终端产出不必建 ctx 线。',
   '- 读取通道：每个下游节点都知道去哪里读上游产出（有 ctx 连线，或上游产出已写成文件且路径已在任务里说明）。',

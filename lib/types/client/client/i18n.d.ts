@@ -176,6 +176,7 @@ export declare const zh: {
     responsibilityDeliverable: string;
     responsibilityRequirementRefs: string;
     responsibilityUnset: string;
+    responsibilityWarnings: string;
     injectSystemPromptLabel: string;
     injectSystemPromptInjected: string;
     injectSystemPromptNotInjected: string;

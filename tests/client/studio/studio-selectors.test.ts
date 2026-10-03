@@ -67,6 +67,28 @@ describe('协作组成员显示名（memberLabelOf）', () => {
 describe('编辑器数据投影（editorDataOf 的资产语义）', () => {
   const base = createInitialState('s-1')
 
+  it('节点属性栏只投影与当前节点相关的 responsibility validation warnings', () => {
+    const node = { id: 'n-1', kind: 'agent', position: { x: 0, y: 0 }, data: { label: '筛选' } } as CanvasNode
+    const flow = {
+      id: 'wf-1', sessionId: 's-1', mode: 'mode1', name: 'F', description: '', nodes: [], lines: [],
+      lastPatch: {
+        origin: 'agent', at: '2026-10-03T00:00:00.000Z', nodeIds: ['n-1'],
+        warnings: [
+          { code: 'responsibilityDuplicate', message: '职责重叠', nodeIds: ['n-1', 'n-2'], responsibilityIds: ['R1', 'R2'] },
+          { code: 'nodeNoUpstream', message: '无上游', nodeIds: ['n-1'], responsibilityIds: [] },
+        ],
+      },
+    } as unknown as WorkflowDocument
+    const state: StudioState = {
+      ...base,
+      currentKind: 'workflow', currentId: 'wf-1', workflows: [flow],
+      editor: { source: 'node', id: 'n-1' }, canvas: { nodes: [node], edges: [] },
+    }
+    expect(editorDataOf(state)?.data.validationWarnings).toEqual([
+      { code: 'responsibilityDuplicate', message: '职责重叠', nodeIds: ['n-1', 'n-2'], responsibilityIds: ['R1', 'R2'] },
+    ])
+  })
+
   it('工作流资产：归档标记随详情透出（属性栏据此置灰归档按钮）', () => {
     const opened: StudioState = {
       ...base,

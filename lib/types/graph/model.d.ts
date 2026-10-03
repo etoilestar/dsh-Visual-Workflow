@@ -11,6 +11,12 @@ export interface ResponsibilityRepairScope {
     incomingLineIds: string[];
     outgoingLineIds: string[];
 }
+/** responsibility.id 的唯一节点查询结果。 */
+export interface ResponsibilityNodeLookup {
+    nodeId: string;
+    nodeData: RoleNode["data"] | GroupNode["data"];
+    responsibility: NonNullable<RoleNode["data"]["responsibility"]>;
+}
 /**
  * 连接点兼容矩阵（NODE_HANDLES）。
  *
@@ -42,6 +48,7 @@ export declare function makeLineId(): string;
  * 按责任标识定位节点与直接相邻连线。
  * 标识缺失或不唯一时返回 null，避免局部修图误改到错误节点。
  */
+export declare function findNodeByResponsibilityId(flow: Partial<WorkflowDocument>, responsibilityId: string): ResponsibilityNodeLookup | null;
 export declare function responsibilityRepairScopeOf(flow: Partial<WorkflowDocument>, responsibilityId: string): ResponsibilityRepairScope | null;
 /**
  * 新建角色节点（父/子代理，数据形状见 shared RoleNode）。

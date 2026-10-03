@@ -48,6 +48,13 @@ export interface ResponsibilityRepairScope {
   outgoingLineIds: string[]
 }
 
+/** responsibility.id 的唯一节点查询结果。 */
+export interface ResponsibilityNodeLookup {
+  nodeId: string
+  nodeData: RoleNode["data"] | GroupNode["data"]
+  responsibility: NonNullable<RoleNode["data"]["responsibility"]>
+}
+
 /**
  * 连接点兼容矩阵（NODE_HANDLES）。
  *
@@ -121,21 +128,31 @@ export function makeLineId(): string {
  * 按责任标识定位节点与直接相邻连线。
  * 标识缺失或不唯一时返回 null，避免局部修图误改到错误节点。
  */
-export function responsibilityRepairScopeOf(
+export function findNodeByResponsibilityId(
   flow: Partial<WorkflowDocument>,
   responsibilityId: string,
-): ResponsibilityRepairScope | null {
+): ResponsibilityNodeLookup | null {
   const id = String(responsibilityId ?? "").trim()
   if (!id) return null
   const matches = (flow.nodes ?? []).filter((node) =>
     (node.kind === "agent" || node.kind === "group") && String(node.data.responsibility?.id ?? "").trim() === id,
   )
   if (matches.length !== 1) return null
-  const nodeId = matches[0]?.id
-  if (!nodeId) return null
+  const node = matches[0]
+  if (!node || (node.kind !== "agent" && node.kind !== "group") || !node.data.responsibility) return null
+  return { nodeId: node.id, nodeData: node.data, responsibility: node.data.responsibility }
+}
+
+export function responsibilityRepairScopeOf(
+  flow: Partial<WorkflowDocument>,
+  responsibilityId: string,
+): ResponsibilityRepairScope | null {
+  const lookup = findNodeByResponsibilityId(flow, responsibilityId)
+  if (!lookup) return null
+  const nodeId = lookup.nodeId
   const lines = flow.lines ?? []
   return {
-    responsibilityId: id,
+    responsibilityId: lookup.responsibility.id,
     nodeId,
     incomingLineIds: lines.filter((line) => line.target === nodeId).map((line) => line.id),
     outgoingLineIds: lines.filter((line) => line.source === nodeId).map((line) => line.id),

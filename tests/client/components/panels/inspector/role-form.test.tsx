@@ -90,6 +90,10 @@ describe('角色表单模式下拉', () => {
           deliverable: '候选文献列表',
           requirementRefs: ['文献检索', '资料整理'],
         },
+        validationWarnings: [{
+          code: 'RESPONSIBILITY_OVERLAP',
+          message: '职责可能与 Evidence Retrieval 重叠。',
+        }],
       },
     })
     expect(container!.textContent).toContain(zh.responsibility)
@@ -98,5 +102,8 @@ describe('角色表单模式下拉', () => {
     expect(container!.textContent).toContain('文献检索 · 资料整理')
     expect(container!.textContent).toContain('R-search')
     expect(container!.textContent).toContain('plan-medical-review')
+    expect(container!.textContent).toContain(zh.responsibilityWarnings)
+    expect(container!.textContent).toContain('RESPONSIBILITY_OVERLAP')
+    expect(container!.textContent).toContain('职责可能与 Evidence Retrieval 重叠。')
   })
 })

@@ -7,6 +7,16 @@ export function ResponsibilityDetails({ data, copy }: { data: Record<string, unk
   const refs = Array.isArray(responsibility?.requirementRefs)
     ? responsibility.requirementRefs.map((item) => String(item).trim()).filter(Boolean)
     : []
+  // validationWarnings 是调用方附加的瞬时投影，不属于 workflow node 持久化契约。
+  const warnings = Array.isArray(data.validationWarnings)
+    ? data.validationWarnings.flatMap((item) => {
+      if (!item || typeof item !== "object") return []
+      const warning = item as Record<string, unknown>
+      const message = String(warning.message ?? "").trim()
+      if (!message) return []
+      return [{ code: String(warning.code ?? "").trim(), message }]
+    })
+    : []
   return (
     <div className="wf-form-stack">
       <h4>{copy.responsibility}</h4>
@@ -28,6 +38,16 @@ export function ResponsibilityDetails({ data, copy }: { data: Record<string, unk
       {String(responsibility?.id ?? "").trim()
         ? <span className="wf-hint">{copy.responsibilityId}: {String(responsibility?.id)}</span>
         : null}
+      {warnings.length > 0 ? (
+        <div className="wf-form-stack" role="status">
+          <strong>{copy.responsibilityWarnings}</strong>
+          {warnings.map((warning, index) => (
+            <span key={`${warning.code}-${index}`} className="wf-hint">
+              {warning.code ? `[${warning.code}] ` : ""}{warning.message}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

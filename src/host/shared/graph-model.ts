@@ -51,6 +51,15 @@ export interface NodeResponsibility {
   requirementRefs?: string[]
 }
 
+/** 可跨 Host/Client 投影的非阻断校验提示。 */
+export interface WorkflowValidationWarning {
+  code: string
+  message: string
+  nodeIds: string[]
+  responsibilityIds: string[]
+  suggestion?: string
+}
+
 /**
  * 角色节点：父代理（kind='parent'）与子代理（kind='agent'）共用的数据形状。
  * Kind 收窄为 'parent' | 'agent'，二者合一为 RoleNode 判别。
@@ -356,6 +365,8 @@ export interface LastAgentPatch {
   at: string
   /** 本次补丁触碰的节点 id（新增/修改/删除的节点；画布据此显示角标）。 */
   nodeIds: string[]
+  /** 本次补丁产生的非阻断提示；供画布 Inspector 定位展示。 */
+  warnings?: WorkflowValidationWarning[]
 }
 
 /** 工作流文档（WorkflowDocument）：完整编排流程定义，关联画布所有节点与连线

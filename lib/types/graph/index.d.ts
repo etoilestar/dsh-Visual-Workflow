@@ -1,8 +1,8 @@
 export { CONDITION_TYPES, HANDLE_PAIRING, NODE_HANDLES, NODE_KINDS } from './model.js';
 export type { NodeHandleDef } from './model.js';
-export type { ResponsibilityRepairScope } from './model.js';
+export type { ResponsibilityNodeLookup, ResponsibilityRepairScope } from './model.js';
 export { makeLineId, makeNodeId, newDatabaseNode, newFileNode, newGroupNode, newLine, newProxyNode, newRoleNode, newStageNode, stageLabel, } from './model.js';
-export { ctxInEdges, dbInEdges, downstreamFlowNodeIds, entryNodes, flowInEdges, flowOutEdges, lineById, nodeById, proxiesOf, responsibilityRepairScopeOf, upstreamCtxNodeIds, } from './model.js';
+export { ctxInEdges, dbInEdges, downstreamFlowNodeIds, entryNodes, flowInEdges, flowOutEdges, findNodeByResponsibilityId, lineById, nodeById, proxiesOf, responsibilityRepairScopeOf, upstreamCtxNodeIds, } from './model.js';
 export { isFlowLine } from './dag.js';
 export { nodeHasFlowIn, nodeParticipatesInFlow } from './model.js';
 export { activeMilestoneGateOf, groupMemberIds, isGroupMember, mainNodeIdOf, memberGroupId, milestoneProxiesOf, proxyRoleOf, } from './model.js';
