@@ -2,8 +2,9 @@
 //
 // `/arrange` 斜杠命令。
 //
-// 职责边界（**只采集 + 注入，绝不改图**）：
+// 职责边界（**只采集 + 追踪 + 注入，绝不改图**）：
 //   - 采集：调用者 agent（接收方）+ rawInput（用户意图）+ 系统语言；
+//   - 追踪：以根 agent.id 保存 planningId 与原始意图到 Host 内存，供独立语义审查引用；
 //   - 注入：buildOrgPlanPrompt 组装的规划提示词，作为一条普通用户消息 followup
 //     给接收 agent，从而开始一轮规划（与 startRun 的指令注入同一通道语义）；
 //   - 不改图：不调用任何 store 写接口、不创建模板/实例、不启动运行（D-11）。
@@ -66,6 +67,10 @@ export interface ArrangeCommandDeps {
   systemLanguage?: () => string
   /** 注入消息 id 生成缝（单测用确定性 id）。 */
   newMessageId?: () => string
+  /** 规划追踪 id 生成缝。 */
+  newPlanningId?: () => string
+  /** 保存原始需求事实源；仅 agent.id 可用时调用。 */
+  recordPlanningIntent?: (sessionId: string, planningId: string, intent: string) => void
   /** 日志缝（注销失败告警；缺省静默）。 */
   logger?: { warn(message: string): void }
 }
@@ -74,11 +79,11 @@ export interface ArrangeCommandDeps {
  * 构建 `/arrange` 注入的规划提示词（纯函数）。
  * 目标固定为 create（新建模板）；既有目标的更新语义由提示词内的语法指引覆盖。
  */
-export function buildArrangePrompt(input: { userIntent: string; systemLanguage?: string }): string {
+export function buildArrangePrompt(input: { userIntent: string; systemLanguage?: string; planningId: string }): string {
   const language = String(input.systemLanguage ?? '').trim()
   return buildOrgPlanPrompt({
     facts: { target: 'create', ...(language ? { systemLanguage: language } : {}) },
-    dynamic: { userIntent: String(input.userIntent ?? '') },
+    dynamic: { userIntent: String(input.userIntent ?? ''), planningId: String(input.planningId ?? '') },
   })
 }
 
@@ -114,7 +119,11 @@ export function registerArrangeCommand(
       }
       const intent = String(invocation?.rawInput ?? '').trim()
       if (!intent) return { kind: 'error', text: ARRANGE_USAGE }
-      const text = buildArrangePrompt({ userIntent: intent, systemLanguage: deps.systemLanguage?.() })
+      const planningId = deps.newPlanningId?.() ?? randomUUID()
+      const sessionId = typeof agent.id === 'string' ? agent.id.trim() : ''
+      if (sessionId) deps.recordPlanningIntent?.(sessionId, planningId, intent)
+      else deps.logger?.warn('[visual-workflow] /arrange agent.id 缺失：semantic tracking unavailable')
+      const text = buildArrangePrompt({ userIntent: intent, systemLanguage: deps.systemLanguage?.(), planningId: sessionId ? planningId : '' })
       followup.call(agent, {
         id: deps.newMessageId?.() ?? randomUUID(),
         role: 'user',

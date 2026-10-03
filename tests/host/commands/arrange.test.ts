@@ -160,9 +160,9 @@ describe('/arrange handler：只采集 + 注入，绝不改图', () => {
   })
 
   it('系统语言透传：给出时注入语言规则，缺省不注入', () => {
-    const withLang = buildArrangePrompt({ userIntent: 'x', systemLanguage: '中文' })
+    const withLang = buildArrangePrompt({ userIntent: 'x', systemLanguage: '中文', planningId: 'plan-1' })
     expect(withLang).toContain('必须使用中文')
-    const without = buildArrangePrompt({ userIntent: 'x' })
+    const without = buildArrangePrompt({ userIntent: 'x', planningId: 'plan-1' })
     expect(without).not.toContain('必须使用')
   })
 
@@ -191,5 +191,41 @@ describe('/arrange handler：只采集 + 注入，绝不改图', () => {
     registerArrangeCommand(ctx)
     const agent = { id: 's', followup: () => { throw new Error('inject failed') } }
     expect(() => registered[0].handler({ agent, rawInput: 'x' })).toThrow('inject failed')
+  })
+
+  it('每次生成 planningId，并把原始意图按真实 session 保存且写入提示词', () => {
+    const { ctx, registered } = makeCtx()
+    const recorded: Array<[string, string, string]> = []
+    const ids = ['plan-1', 'plan-2']
+    registerArrangeCommand(ctx, {
+      newPlanningId: () => ids.shift() ?? 'unexpected',
+      recordPlanningIntent: (sessionId, planningId, intent) => recorded.push([sessionId, planningId, intent]),
+    })
+    const { agent, messages } = makeAgent()
+    registered[0].handler({ agent, rawInput: '需求 A' })
+    registered[0].handler({ agent, rawInput: '需求 B' })
+    expect(recorded).toEqual([
+      ['session-1', 'plan-1', '需求 A'],
+      ['session-1', 'plan-2', '需求 B'],
+    ])
+    expect(messages[0].content[0].text).toContain('planningId="plan-1"')
+    expect(messages[1].content[0].text).toContain('planningId="plan-2"')
+  })
+
+  it('agent.id 缺失时保持注入兼容并明确告警，不保存错误会话键', () => {
+    const { ctx, registered } = makeCtx()
+    const warnings: string[] = []
+    const recorded: unknown[] = []
+    registerArrangeCommand(ctx, {
+      newPlanningId: () => 'plan-1',
+      recordPlanningIntent: (...args) => recorded.push(args),
+      logger: { warn: (message) => warnings.push(message) },
+    })
+    const messages: ArrangeInjectedMessage[] = []
+    const result = registered[0].handler({ agent: { followup: (message: ArrangeInjectedMessage) => messages.push(message) }, rawInput: '需求' })
+    expect(result).toEqual({ kind: 'success', text: ARRANGE_ACCEPTED_TEXT })
+    expect(recorded).toEqual([])
+    expect(warnings[0]).toContain('semantic tracking unavailable')
+    expect(messages[0].content[0].text).not.toContain('planningId=')
   })
 })

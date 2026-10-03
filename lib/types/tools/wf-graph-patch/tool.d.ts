@@ -1,8 +1,9 @@
 import { hasBlockingIssues } from '../../graph/index.js';
-import { type PatchScope } from './types.js';
+import { type GraphPatchArguments, type PatchScope } from './types.js';
 import type { GraphNode, Line, WorkflowDocument, WorkflowTemplate } from '../../shared/graph-model.js';
 import type { OrgBudget } from '../../shared/types.js';
 import type { MilestoneMarkResult, MilestoneRunFacts, RunEntry } from '../../orchestrator/index.js';
+import type { SemanticPlanningLike } from '../../semantic/index.js';
 /** 工具层所需宿主能力（宿主 service 的最小结构适配；单测 fake）。 */
 export interface GraphPatchHost {
     /** 数据层读写（模板/实例文档 + 运行事实源刷新）。 */
@@ -67,6 +68,8 @@ export interface GraphPatchHost {
      * 抽成缝的原因：单测需要确定性 id，而 id 生成不是工具的校验逻辑。
      */
     newTemplateId?: () => string;
+    /** /arrange 规划期语义审查的最小宿主缝。 */
+    semanticPlanning?: SemanticPlanningLike;
 }
 /** 补丁执行结果（工具返回体）。 */
 export interface GraphPatchToolResult {
@@ -101,13 +104,7 @@ export interface GraphPatchToolResult {
     };
 }
 /** 组装并执行一次补丁（导出供单测直接断言，无需起工具注册表）。 */
-export declare function executeGraphPatch(host: GraphPatchHost, sessionId: string, args: {
-    scope?: unknown;
-    targetId?: unknown;
-    ops?: unknown;
-    expectRevision?: unknown;
-    create?: unknown;
-}): Promise<GraphPatchToolResult>;
+export declare function executeGraphPatch(host: GraphPatchHost, sessionId: string, args: GraphPatchArguments): Promise<GraphPatchToolResult>;
 /**
  * 注册 wf_graph_patch（全局层；ctx.tools.register）。
  * 返回 disposer：注销失败尽力而为。

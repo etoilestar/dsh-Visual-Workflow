@@ -21,6 +21,7 @@ import { stageLabel } from '../../../../src/host/graph/index.js'
 import { OP_FIELD_SHAPES, PATCH_CONTRACT_POINTER } from '../../../../src/host/tools/infrastructure/graph-op-contract.js'
 import type { GraphNode, Line, WorkflowDocument, WorkflowTemplate } from '../../../../src/host/shared/graph-model.js'
 import type { RunSnapshot } from '../../../../src/host/shared/types.js'
+import type { SemanticIssue, SemanticPlanningLike, SemanticReviewOutcome } from '../../../../src/host/semantic/index.js'
 
 // ---------------------------------------------------------------------------
 // fake 宿主（store + orchestrator）
@@ -227,6 +228,26 @@ function makeTemplate(id = 'tpl-1', extra: Partial<WorkflowTemplate> = {}): Work
     nodes: [stageNode('s', 'start'), roleNode('a1'), stageNode('e', 'end')],
     lines: [flowLine('l1', 's', 'a1'), flowLine('l2', 'a1', 'e')],
     ...extra,
+  }
+}
+
+function semanticPlanning(outcomes: SemanticReviewOutcome[]): SemanticPlanningLike & { candidates: WorkflowDocument[]; failures: WorkflowDocument[] } {
+  const candidates: WorkflowDocument[] = []
+  const failures: WorkflowDocument[] = []
+  return {
+    candidates,
+    failures,
+    getPlanningContext: (sessionId) => ({ sessionId, planningId: 'plan-1', originalUserIntent: '需求' }),
+    validateRepairScope: () => undefined,
+    reviewCandidate: async (_sessionId, _planningId, candidate) => {
+      candidates.push(candidate)
+      return outcomes.shift() ?? { available: true, result: { passed: true, requirements: [], issues: [] } }
+    },
+    recordFailure: (_sessionId, _planningId, candidate, issues) => {
+      failures.push(candidate)
+      return { candidate, issues, fingerprint: 'fp', repeatCount: 1, affectedNodeIds: issues.flatMap((issue) => issue.affectedNodeIds), repairMode: 'local' }
+    },
+    clearFailure: () => undefined,
   }
 }
 
@@ -497,6 +518,83 @@ describe('wf_graph_patch · 图结构变更组', () => {
     expect(result.revision).toBe(3)
     const saved = storeState.templates.get('tpl-1')
     expect((saved?.nodes.find((node) => node.id === 'a1') as { data: { label: string } }).data.label).toBe('模板里的分析')
+  })
+})
+
+describe('wf_graph_patch · /arrange semantic review', () => {
+  const semanticError: SemanticIssue = {
+    type: 'requirement_uncovered', level: 'error', requirementIds: ['R1'], affectedNodeIds: [],
+    reason: '需求未覆盖', evidence: '无 owner', repairGuidance: '新增必要 owner',
+  }
+
+  it('有效 planningId 在结构检查后审查；error 保存内存 candidate 但不落盘', async () => {
+    const planning = semanticPlanning([{ available: true, result: { passed: false, requirements: [{ id: 'R1', text: '分析', ownerNodeIds: [] }], issues: [semanticError] } }])
+    const { host, storeState } = makeHost({ semanticPlanning: planning })
+    storeState.templates.set('tpl-1', makeTemplate())
+    const before = structuredClone(storeState.templates.get('tpl-1'))
+    const error = await expectWfError(() => executeGraphPatch(host, 'session-1', {
+      scope: 'template', targetId: 'tpl-1', expectRevision: 2, planningId: 'plan-1',
+      ops: [{ op: 'update_node_data', nodeId: 'a1', data: { label: '新标签' } }],
+    }), 'WF_SEMANTIC_INVALID')
+    expect(error.message).toContain('requirement=R1')
+    expect(error.message).toContain('repairMode=local')
+    expect(planning.candidates).toHaveLength(1)
+    expect(planning.failures).toHaveLength(1)
+    expect(storeState.templates.get('tpl-1')).toEqual(before)
+  })
+
+  it('warning 允许保存并映射到既有 warnings；reviewer unavailable 显式 fail-open', async () => {
+    const overlap: SemanticIssue = {
+      type: 'responsibility_overlap', level: 'warning', requirementIds: ['R1'], affectedNodeIds: ['a1'],
+      reason: '重叠', evidence: '证据', repairGuidance: '收窄',
+    }
+    const planning = semanticPlanning([
+      { available: true, result: { passed: true, requirements: [{ id: 'R1', text: '任务', ownerNodeIds: ['a1'] }], issues: [overlap] } },
+      { available: false, unavailableReason: 'LLM unavailable' },
+    ])
+    const { host, storeState } = makeHost({ semanticPlanning: planning })
+    storeState.templates.set('tpl-1', makeTemplate())
+    const warning = await executeGraphPatch(host, 'session-1', {
+      scope: 'template', targetId: 'tpl-1', expectRevision: 2, planningId: 'plan-1',
+      ops: [{ op: 'update_node_data', nodeId: 'a1', data: { label: 'v1' } }],
+    })
+    expect(warning.warnings.some((item) => item.code === 'semanticResponsibilityOverlap')).toBe(true)
+    const unavailable = await executeGraphPatch(host, 'session-1', {
+      scope: 'template', targetId: 'tpl-1', expectRevision: 3, planningId: 'plan-1',
+      ops: [{ op: 'update_node_data', nodeId: 'a1', data: { label: 'v2' } }],
+    })
+    expect(unavailable.warnings).toContainEqual({ code: 'semanticReviewUnavailable', message: 'LLM unavailable' })
+    expect(storeState.templates.get('tpl-1')?.revision).toBe(4)
+  })
+
+  it('planningId 与 session 不匹配为 WF_BAD_ARGS，且普通 patch 不触发 semantic review', async () => {
+    const planning = semanticPlanning([])
+    planning.getPlanningContext = () => undefined
+    const { host, storeState } = makeHost({ semanticPlanning: planning })
+    storeState.templates.set('tpl-1', makeTemplate())
+    await expectWfError(() => executeGraphPatch(host, 'session-1', {
+      scope: 'template', targetId: 'tpl-1', planningId: 'other',
+      ops: [{ op: 'update_node_data', nodeId: 'a1', data: { label: 'x' } }],
+    }), 'WF_BAD_ARGS')
+    const result = await executeGraphPatch(host, 'session-1', {
+      scope: 'template', targetId: 'tpl-1', expectRevision: 2,
+      ops: [{ op: 'update_node_data', nodeId: 'a1', data: { label: 'ordinary' } }],
+    })
+    expect(result.ok).toBe(true)
+    expect(planning.candidates).toHaveLength(0)
+  })
+
+  it('repair scope 超出时不审查也不落盘', async () => {
+    const planning = semanticPlanning([])
+    planning.validateRepairScope = () => { throw Object.assign(new Error('changedOutsideScope=e'), { code: 'WF_REPAIR_SCOPE_EXCEEDED' }) }
+    const { host, storeState } = makeHost({ semanticPlanning: planning })
+    storeState.templates.set('tpl-1', makeTemplate())
+    await expectWfError(() => executeGraphPatch(host, 'session-1', {
+      scope: 'template', targetId: 'tpl-1', expectRevision: 2, planningId: 'plan-1',
+      ops: [{ op: 'update_node_data', nodeId: 'a1', data: { label: 'x' } }],
+    }), 'WF_REPAIR_SCOPE_EXCEEDED')
+    expect(planning.candidates).toHaveLength(0)
+    expect(storeState.templates.get('tpl-1')?.revision).toBe(2)
   })
 })
 
