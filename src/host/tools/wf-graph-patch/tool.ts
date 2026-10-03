@@ -47,6 +47,7 @@ import {
   groupsOf,
   unknownOpsOf,
   type GraphPatchOp,
+  type GraphPatchArguments,
   type GraphPatchResult,
   type MarkPatchOp,
   type NewTemplateSpec,
@@ -58,6 +59,7 @@ import {
 import type { GraphNode, Line, WorkflowDocument, WorkflowTemplate } from '../../shared/graph-model.js'
 import type { OrgBudget } from '../../shared/types.js'
 import type { MilestoneMarkResult, MilestoneRunFacts, RunEntry } from '../../orchestrator/index.js'
+import type { SemanticIssue, SemanticPlanningLike } from '../../semantic/index.js'
 
 /** 工具层所需宿主能力（宿主 service 的最小结构适配；单测 fake）。 */
 export interface GraphPatchHost {
@@ -105,6 +107,8 @@ export interface GraphPatchHost {
    * 抽成缝的原因：单测需要确定性 id，而 id 生成不是工具的校验逻辑。
    */
   newTemplateId?: () => string
+  /** /arrange 规划期语义审查的最小宿主缝。 */
+  semanticPlanning?: SemanticPlanningLike
 }
 
 /** 补丁执行结果（工具返回体）。 */
@@ -301,9 +305,9 @@ function assertSingleGroup(ops: PatchOp[]): PatchGroup {
 /** 图结构变更组：逐条容错应用 → 聚合拒绝或结构校验 → 元参数硬护栏 → 落盘 → 事实源刷新。 */
 async function runGraphGroup(
   host: GraphPatchHost,
-  input: { scope: PatchScope; sessionId: string; targetId: string; expectRevision?: number; newTemplateDoc?: WorkflowTemplate },
+  input: { scope: PatchScope; sessionId: string; targetId: string; expectRevision?: number; newTemplateDoc?: WorkflowTemplate; planningId?: string },
   ops: GraphPatchOp[],
-): Promise<{ revision: number; issues: GraphIssue[]; result: GraphPatchResult; savedId: string; budget: OrgBudget }> {
+): Promise<{ revision: number; issues: GraphIssue[]; semanticWarnings: Array<{ code: string; message: string }>; result: GraphPatchResult; savedId: string; budget: OrgBudget }> {
   const loaded = await loadDoc(host, input)
   const doc = loaded as WorkflowDocument
   const meta = effectiveOrgMeta(metaOfDocument(doc))
@@ -336,6 +340,37 @@ async function runGraphGroup(
   })
   const blocking = issues.filter((issue) => issue.level === 'error')
   if (blocking.length > 0) throwGraphInvalid(blocking)
+  const semanticWarnings: Array<{ code: string; message: string }> = []
+  if (input.scope === 'template' && input.planningId && host.semanticPlanning) {
+    const candidate = result.doc as unknown as WorkflowDocument
+    try {
+      host.semanticPlanning.validateRepairScope(input.sessionId, input.planningId, candidate)
+    } catch (error) {
+      const code = String((error as { code?: unknown })?.code ?? 'WF_REPAIR_SCOPE_EXCEEDED')
+      throw new WfError(error instanceof Error ? error.message : String(error), code)
+    }
+    const review = await host.semanticPlanning.reviewCandidate(input.sessionId, input.planningId, candidate)
+    if (!review.available || !review.result) {
+      semanticWarnings.push({ code: 'semanticReviewUnavailable', message: review.unavailableReason ?? '独立语义审查不可用，本次显式 fail-open。' })
+      host.semanticPlanning.clearFailure(input.sessionId, input.planningId)
+    } else {
+      for (const issue of review.result.issues.filter((item) => item.level === 'warning')) {
+        semanticWarnings.push({ code: issue.type === 'responsibility_overlap' ? 'semanticResponsibilityOverlap' : issue.type, message: semanticIssueDetail(issue) })
+      }
+      const errors = review.result.issues.filter((item) => item.level === 'error')
+      if (errors.length > 0) {
+        const failure = host.semanticPlanning.recordFailure(input.sessionId, input.planningId, candidate, errors)
+        const guidance = failure.repairMode === 'boundary_replan'
+          ? '\npreserve unrelated nodes; do not regenerate the whole workflow; only reconsider the affected responsibility boundary.'
+          : ''
+        throw new WfError(
+          `独立语义审查未通过；repairMode=${failure.repairMode} repeatCount=${failure.repeatCount}\n${errors.map(semanticIssueDetail).join('\n')}${guidance}`,
+          'WF_SEMANTIC_INVALID',
+        )
+      }
+      host.semanticPlanning.clearFailure(input.sessionId, input.planningId)
+    }
+  }
   // 记录「父代理最近一次补丁」——画布给这些节点加「AI 调整」角标。用户保存路径经
   // FlowStore.stripClientMeta 清除本字段，因此角标天然只表示「用户尚未确认的代理改动」。
   ;(result.doc as { lastPatch?: unknown }).lastPatch = {
@@ -347,11 +382,16 @@ async function runGraphGroup(
   return {
     revision: saved.revision,
     issues,
+    semanticWarnings,
     result,
     savedId: saved.id,
     // 预算取补丁后的规模：父代理据此判断「还能加几个节点」，而不是补丁前的旧值
     budget: budgetOf(result.doc as unknown as WorkflowDocument, { milestoneUsed, patchOps: ops.length }),
   }
+}
+
+function semanticIssueDetail(issue: SemanticIssue): string {
+  return `[${issue.type}] requirement=${issue.requirementIds.join(',')} affectedNodes=${issue.affectedNodeIds.join(',')} reason=${issue.reason} evidence=${issue.evidence} repair=${issue.repairGuidance}`
 }
 
 /** 目录清单里的一行（存在性校验只关心 id）。 */
@@ -600,7 +640,7 @@ async function saveDoc(
 export async function executeGraphPatch(
   host: GraphPatchHost,
   sessionId: string,
-  args: { scope?: unknown; targetId?: unknown; ops?: unknown; expectRevision?: unknown; create?: unknown },
+  args: GraphPatchArguments,
 ): Promise<GraphPatchToolResult> {
   const scope = String(args?.scope ?? '') as PatchScope
   if (scope !== 'template' && scope !== 'instance') {
@@ -618,6 +658,14 @@ export async function executeGraphPatch(
     throw new WfError(`mark 组一次只能提交 1 条 op（当前闸门只有一个），收到 ${ops.length} 条`, 'WF_BAD_ARGS')
   }
   const expectRevision = Number.isFinite(Number(args?.expectRevision)) ? Number(args.expectRevision) : undefined
+  const planningId = args?.planningId === undefined ? '' : String(args.planningId).trim()
+  if (args?.planningId !== undefined && !planningId) throw new WfError('planningId 必须是非空字符串', 'WF_BAD_ARGS')
+  if (planningId) {
+    const context = host.semanticPlanning?.getPlanningContext(sessionId)
+    if (!context || context.sessionId !== sessionId || context.planningId !== planningId) {
+      throw new WfError('planningId 不属于当前会话或已被新的 /arrange 替换', 'WF_BAD_ARGS')
+    }
+  }
 
   // —— create 通路的参数层约束（先于任何读盘，错误可立即自我修正） ——
   if (spec && scope !== 'template') {
@@ -654,12 +702,13 @@ export async function executeGraphPatch(
     targetId,
     ...(expectRevision !== undefined ? { expectRevision } : {}),
     ...(spec ? { newTemplateDoc: newTemplateDoc(targetId, spec) } : {}),
+    ...(planningId ? { planningId } : {}),
   }
   // 新建路径跳过「目标必须已存在」校验（它正是本批补丁要创建的东西）
   if (!spec) await assertScopeTarget(host, scope, { sessionId, targetId })
 
   if (group === 'graph') {
-    const { revision, issues, result, budget } = await runGraphGroup(host, baseInput, ops as GraphPatchOp[])
+    const { revision, issues, semanticWarnings, result, budget } = await runGraphGroup(host, baseInput, ops as GraphPatchOp[])
     return {
       ok: true,
       scope,
@@ -667,7 +716,7 @@ export async function executeGraphPatch(
       revision,
       applied: ops.length,
       budget,
-      warnings: warningsOf(issues),
+      warnings: [...warningsOf(issues), ...semanticWarnings],
       // create 通路：明确告知模型「这是新模板 id，后续补丁/投产都用它」
       ...(spec ? { newTemplate: true } : {}),
       created: result.createdNodeIds,
@@ -733,6 +782,7 @@ export function registerWfGraphPatch(
         },
       },
       expectRevision: { type: 'number', description: 'Optimistic-lock revision you last read; mismatch is rejected without retry (WF_PATCH_CONFLICT).' },
+      planningId: { type: 'string', description: 'Server-issued /arrange planning id. Required for /arrange graph patches; omit for ordinary patches. It selects the immutable original user intent.' },
       ops: {
         type: 'array',
         required: true,

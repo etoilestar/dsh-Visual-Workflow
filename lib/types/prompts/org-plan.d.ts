@@ -43,6 +43,8 @@ export interface OrgPlanPromptParams {
     dynamic: {
         /** 用户本次规划意图（不稳定内容，仅末段注入）。 */
         userIntent: string;
+        /** 本次 /arrange 的服务器追踪 id。 */
+        planningId?: string;
         /**
          * L3 用户 SOP 注入点（D-19）。
          * TODO(可视化可调项)：目前无任何调用方传入（`/arrange` 只传 userIntent），

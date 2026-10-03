@@ -34,6 +34,16 @@ export interface NewTemplateSpec {
   mode?: 'mode1' | 'mode2'
 }
 
+/** Tool-facing 参数；planningId 只引用 Host 保存的原始意图，不携带或改写需求正文。 */
+export interface GraphPatchArguments {
+  scope?: unknown
+  targetId?: unknown
+  ops?: unknown
+  expectRevision?: unknown
+  create?: unknown
+  planningId?: unknown
+}
+
 /** 图结构变更组。 */
 export type GraphPatchOp =
   | { op: 'create_node'; node: Record<string, unknown> }

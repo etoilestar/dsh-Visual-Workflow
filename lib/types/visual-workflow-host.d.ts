@@ -44,6 +44,8 @@ export declare class VisualWorkflowHost extends Service {
     readonly sessionProvider: CordisSessionProvider;
     /** 会话工作目录解析（新会话继承创建者 cwd 用；API 端点使用）。 */
     readonly sessionCwdOf: (sessionId: string) => Promise<string | undefined>;
+    /** /arrange 原始意图与语义修复状态；仅驻留 Host 内存。 */
+    private readonly semanticPlanning;
     /** ReAct 软截停护栏（桥供 runner/编排器，贡献注入子代理）。 */
     private readonly reactGuard;
     /** 思考强度模型选择装配。 */

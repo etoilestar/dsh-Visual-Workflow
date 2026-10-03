@@ -50,6 +50,10 @@ export interface ArrangeCommandDeps {
     systemLanguage?: () => string;
     /** 注入消息 id 生成缝（单测用确定性 id）。 */
     newMessageId?: () => string;
+    /** 规划追踪 id 生成缝。 */
+    newPlanningId?: () => string;
+    /** 保存原始需求事实源；仅 agent.id 可用时调用。 */
+    recordPlanningIntent?: (sessionId: string, planningId: string, intent: string) => void;
     /** 日志缝（注销失败告警；缺省静默）。 */
     logger?: {
         warn(message: string): void;
@@ -62,6 +66,7 @@ export interface ArrangeCommandDeps {
 export declare function buildArrangePrompt(input: {
     userIntent: string;
     systemLanguage?: string;
+    planningId: string;
 }): string;
 /** 命令失败文案：接收 Agent 未激活。 */
 export declare const ARRANGE_NO_AGENT = "\u5F53\u524D\u4F1A\u8BDD\u4E0D\u53EF\u7528\u4E8E\u7F16\u6392\u89C4\u5212\uFF08\u63A5\u6536 Agent \u672A\u6FC0\u6D3B\uFF09\u3002";

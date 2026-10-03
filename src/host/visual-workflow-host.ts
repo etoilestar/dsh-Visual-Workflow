@@ -56,6 +56,7 @@ import { EmbeddingService } from './embedding/engine.js'
 import { ServiceManager } from './service/index.js'
 import { SchedulerEngine, SchedulerTaskStore } from './scheduler/index.js'
 import { CordisSessionProvider, sessionCwdResolver } from './sessions/session-provider.js'
+import { SemanticPlanningService, SemanticReviewer, type AgentDefaultModelLike, type LlmLike } from './semantic/index.js'
 
 export const VisualWorkflowHostServiceName = 'visualWorkflowHost'
 
@@ -92,6 +93,8 @@ export class VisualWorkflowHost extends Service {
   readonly sessionProvider: CordisSessionProvider
   /** 会话工作目录解析（新会话继承创建者 cwd 用；API 端点使用）。 */
   readonly sessionCwdOf: (sessionId: string) => Promise<string | undefined>
+  /** /arrange 原始意图与语义修复状态；仅驻留 Host 内存。 */
+  private readonly semanticPlanning: SemanticPlanningService
   /** ReAct 软截停护栏（桥供 runner/编排器，贡献注入子代理）。 */
   private readonly reactGuard = createReactGuard()
   /** 思考强度模型选择装配。 */
@@ -144,6 +147,11 @@ export class VisualWorkflowHost extends Service {
     this.assetStore = new AssetStore(config.dataDir)
     this.toolSwitches = new ToolSwitchStore(config.dataDir)
     this.agents = new CordisAgentHost(ctx)
+    this.semanticPlanning = new SemanticPlanningService(new SemanticReviewer({
+      agentDefaultModel: () => ctx.get('agentDefaultModel') as AgentDefaultModelLike | null,
+      llm: () => ctx.get('llm') as LlmLike | null,
+      logger: { error: (message) => ctx.logger.error(message) },
+    }))
     this.embedding = new EmbeddingService({
       modelDir: config.embeddingModelDir,
       endpoint: config.embeddingEndpoint,
@@ -585,7 +593,12 @@ export class VisualWorkflowHost extends Service {
     // commands 服务未组合（headless / 模式二服务进程）时内部静默跳过，不影响既有行为。
     try {
       this.ctx.effect(
-        () => registerArrangeCommand(this.ctx, { systemLanguage: () => this.systemLanguage() }),
+        () => registerArrangeCommand(this.ctx, {
+          systemLanguage: () => this.systemLanguage(),
+          recordPlanningIntent: (sessionId, planningId, intent) =>
+            this.semanticPlanning.recordArrangeIntent(sessionId, planningId, intent),
+          logger: { warn: (message) => this.ctx.logger.warn(message) },
+        }),
         'visualWorkflowHost.arrangeCommand',
       )
     } catch (error) {
@@ -674,6 +687,7 @@ export class VisualWorkflowHost extends Service {
         const entry = this.orchestrator.entryFor(runId)
         if (entry) await this.orchestrator.persistRunSnapshot(entry)
       },
+      semanticPlanning: this.semanticPlanning,
     }
   }
 
