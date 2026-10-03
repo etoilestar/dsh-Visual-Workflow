@@ -84,6 +84,9 @@ export interface GraphPatchToolResult {
     warnings: Array<{
         code: string;
         message: string;
+        nodeIds: string[];
+        responsibilityIds: string[];
+        suggestion?: string;
     }>;
     /** true = 本次补丁新建了模板（scope=template + create）；targetId 即新模板 id。 */
     newTemplate?: boolean;

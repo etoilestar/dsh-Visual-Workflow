@@ -10,6 +10,9 @@ export function ResponsibilityDetails({ data, copy }: { data: Record<string, unk
   return (
     <div className="wf-form-stack">
       <h4>{copy.responsibility}</h4>
+      {String(responsibility?.planningId ?? "").trim()
+        ? <span className="wf-hint">{copy.responsibilityPlanningId}: {String(responsibility?.planningId)}</span>
+        : null}
       <div className="wf-pathbox">
         <span className="wf-pathbox__label">{copy.responsibilityPurpose}</span>
         <span className="wf-pathbox__value">{String(responsibility?.purpose ?? "").trim() || copy.responsibilityUnset}</span>

@@ -14,7 +14,7 @@ export declare const MARK_OP_FIELD_TEXT = "{ op:'mark_node', nodeId:string, stat
  */
 export declare const ROLE_NODE_DATA_CONTRACT: string;
 /** agent / group 共用的责任元数据写图说明。 */
-export declare const RESPONSIBILITY_DATA_CONTRACT = "agent/group \u8282\u70B9\u5E94\u5728 data.responsibility \u5199\u5165 {id:string,purpose:string,deliverable?:string,requirementRefs?:string[]}\uFF1B\u8FD9\u662F\u8282\u70B9\u8D23\u4EFB\u4E0E\u9700\u6C42\u6765\u6E90\uFF0C\u4E0D\u662F\u72EC\u7ACB\u8D23\u4EFB\u56FE\u3002\u4FEE\u6539\u65E2\u6709\u8D23\u4EFB\u65F6\u5148\u6309 responsibility.id \u5B9A\u4F4D\u8282\u70B9\uFF0C\u53EA\u7528 update_node_data \u66F4\u65B0\u8BE5\u8282\u70B9\uFF0C\u5E76\u4EC5\u5728\u786E\u6709\u5FC5\u8981\u65F6\u8C03\u6574\u5176\u76F4\u63A5\u4E0A\u4E0B\u6E38\u8FDE\u7EBF\uFF0C\u4FDD\u7559\u65E0\u5173\u8282\u70B9\u3002";
+export declare const RESPONSIBILITY_DATA_CONTRACT = "agent/group \u8282\u70B9\u5E94\u5728 data.responsibility \u5199\u5165 {planningId?:string,id:string,purpose:string,deliverable?:string,requirementRefs?:string[]}\uFF1B\u8FD9\u662F\u8282\u70B9\u8D23\u4EFB\u4E0E\u9700\u6C42\u6765\u6E90\uFF0C\u4E0D\u662F\u72EC\u7ACB\u8D23\u4EFB\u56FE\u3002\u4FEE\u6539\u65E2\u6709\u8D23\u4EFB\u65F6\u5148\u4ECE wf_org_catalog \u8FD4\u56DE\u7684\u8282\u70B9 responsibility.id \u552F\u4E00\u5B9A\u4F4D node.id\uFF0C\u53EA\u7528 update_node_data \u66F4\u65B0\u8BE5\u8282\u70B9\uFF0C\u5E76\u4EC5\u5728\u786E\u6709\u5FC5\u8981\u65F6 disconnect/connect \u5B83\u7684\u76F4\u63A5\u4E0A\u4E0B\u6E38\u8FDE\u7EBF\uFF1B\u4E0D\u5F97\u91CD\u5EFA\u6574\u56FE\u6216\u6539\u52A8\u65E0\u5173\u8282\u70B9\u4E0E\u8FDE\u7EBF\u3002";
 /** 提交规则：一次补丁怎么组织、哪些形态会被拒绝。 */
 export declare const PATCH_SUBMISSION_RULES: string;
 /** 稳定错误码语义（按「该改什么」分组，模型据此选择修正方向）。 */

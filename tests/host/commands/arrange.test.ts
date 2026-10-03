@@ -148,7 +148,9 @@ describe('/arrange handler：只采集 + 注入，绝不改图', () => {
     expect(text).toContain('做一个内容生产流水线')
     expect(text).toContain('data.responsibility')
     expect(text).toContain('responsibility.id')
-    expect(text).toContain('保持无关节点与连线不变')
+    expect(text).toContain('responsibilities:[{id,purpose,deliverable,requirementRefs}]')
+    expect(text).toContain('不得改动无关 edge')
+    expect(text).toContain('标识缺失或不唯一时先向用户澄清')
   })
 
   it('目标默认 create（新建模板）：提示词指引走 create 通路而非要求用户先给 targetId', () => {

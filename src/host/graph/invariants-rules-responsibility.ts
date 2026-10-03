@@ -18,7 +18,7 @@ function comparablePurpose(value: string): string {
     .toLocaleLowerCase()
     .replace(/搜索/g, "检索")
     .replace(/论文/g, "文献")
-    .replace(/相关|有关|负责|进行|并|和|与/g, "")
+    .replace(/相关|有关|负责|进行/g, "")
     .replace(/[\s\p{P}\p{S}]+/gu, "")
 }
 
@@ -45,6 +45,7 @@ export function ruleNodeResponsibilities(input: CheckGraphInput): GraphIssue[] {
   const issues: GraphIssue[] = []
   for (const node of nodes) {
     const responsibility = responsibilityOf(node)
+    const responsibilityId = String(responsibility?.id ?? "").trim()
     const purpose = String(responsibility?.purpose ?? "").trim()
     if (!purpose) {
       issues.push({
@@ -52,17 +53,47 @@ export function ruleNodeResponsibilities(input: CheckGraphInput): GraphIssue[] {
         level: "warning",
         message: `节点「${node.data.label || node.id}」缺少核心职责，无法解释为什么需要该节点。`,
         nodeIds: [node.id],
+        responsibilityIds: responsibilityId ? [responsibilityId] : [],
         suggestion: "补充 data.responsibility.id 与 purpose，并用 requirementRefs 记录对应的需求来源。",
       })
-    } else if (!String(responsibility?.deliverable ?? "").trim()) {
+    } else if (!responsibilityId) {
+      issues.push({
+        code: "responsibilityIdMissing",
+        level: "warning",
+        message: `节点「${node.data.label || node.id}」的职责缺少 id，无法安全定位局部修复目标。`,
+        nodeIds: [node.id],
+        responsibilityIds: [],
+        suggestion: "为 data.responsibility.id 补充工作流内唯一且稳定的标识。",
+      })
+    }
+    if (purpose && !String(responsibility?.deliverable ?? "").trim()) {
       issues.push({
         code: "responsibilityDeliverableMissing",
         level: "warning",
         message: `节点「${node.data.label || node.id}」已有职责，但没有说明应产出什么结果。`,
         nodeIds: [node.id],
+        responsibilityIds: responsibilityId ? [responsibilityId] : [],
         suggestion: "在 data.responsibility.deliverable 中补充可供下游消费的产出。",
       })
     }
+  }
+
+  const nodesByResponsibilityId = new Map<string, ResponsibilityNode[]>()
+  for (const node of nodes) {
+    const id = String(responsibilityOf(node)?.id ?? "").trim()
+    if (!id) continue
+    nodesByResponsibilityId.set(id, [...(nodesByResponsibilityId.get(id) ?? []), node])
+  }
+  for (const [id, matchingNodes] of nodesByResponsibilityId) {
+    if (matchingNodes.length < 2) continue
+    issues.push({
+      code: "responsibilityIdDuplicate",
+      level: "warning",
+      message: `责任标识「${id}」对应多个节点，无法唯一定位局部修复目标。`,
+      nodeIds: matchingNodes.map((node) => node.id),
+      responsibilityIds: [id],
+      suggestion: "为这些节点分配互不重复的 responsibility.id 后再执行局部修图。",
+    })
   }
 
   for (let left = 0; left < nodes.length; left += 1) {
@@ -80,6 +111,8 @@ export function ruleNodeResponsibilities(input: CheckGraphInput): GraphIssue[] {
         level: "warning",
         message: `节点「${leftNode.data.label || leftNode.id}」与「${rightNode.data.label || rightNode.id}」的职责高度相似，可能存在重复。`,
         nodeIds: [leftNode.id, rightNode.id],
+        responsibilityIds: [responsibilityOf(leftNode)?.id, responsibilityOf(rightNode)?.id]
+          .map((id) => String(id ?? "").trim()).filter(Boolean),
         suggestion: "确认两者职责边界；仅在确属重复时由规划者决定是否调整，不自动合并或删除节点。",
       })
     }
@@ -93,6 +126,8 @@ export function ruleNodeResponsibilities(input: CheckGraphInput): GraphIssue[] {
       code: "requirementUncovered",
       level: "warning",
       message: `需求「${normalized}」尚未被任何节点的 responsibility.requirementRefs 覆盖。`,
+      nodeIds: [],
+      responsibilityIds: [],
       suggestion: "把需求引用分配给承担该目标的现有节点；只有职责确实独立时才新增节点。",
     })
   }

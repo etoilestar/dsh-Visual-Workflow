@@ -649,6 +649,26 @@ describe('规则矩阵（每个 code 一例）', () => {
     const issues = check({ flow: doc, requirementRefs: ['文献检索', '生成报告'] })
     expect(issues.find((issue) => issue.code === 'requirementUncovered')?.message).toContain('生成报告')
   })
+
+  it('responsibilityIdMissing / responsibilityIdDuplicate：不可唯一定位时给出节点与责任定位信息', () => {
+    const doc = flow(
+      [
+        stage('s', 'start'),
+        agent('a1', '分析', { responsibility: { id: '', purpose: '分析资料', deliverable: '摘要' } }),
+        agent('a2', '初审', { responsibility: { id: 'R-review', purpose: '初步评审', deliverable: '初审意见' } }),
+        groupNode('g1', ['a2'], { responsibility: { id: 'R-review', purpose: '联合复核', deliverable: '复核意见' } }),
+        stage('e', 'end'),
+      ],
+      [line('l1', 's', 'a1'), line('l2', 'a1', 'g1'), line('l3', 'g1', 'e')],
+    )
+    const issues = check({ flow: doc })
+    expect(issues.find((issue) => issue.code === 'responsibilityIdMissing')).toMatchObject({
+      nodeIds: ['a1'], responsibilityIds: [], level: 'warning',
+    })
+    expect(issues.find((issue) => issue.code === 'responsibilityIdDuplicate')).toMatchObject({
+      nodeIds: ['a2', 'g1'], responsibilityIds: ['R-review'], level: 'warning',
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import type { ExperienceIndexEntry } from '../../shared/asset-types.js';
-import type { ConditionType, Handle } from '../../shared/graph-model.js';
+import type { ConditionType, Handle, NodeResponsibility } from '../../shared/graph-model.js';
 import type { OrgMeta } from '../../shared/types.js';
 /** 工作流资产 id 前缀：可召回完整骨架。 */
 export declare const WORKFLOW_ID_PREFIX = "flow-";
@@ -131,6 +131,8 @@ export interface CatalogRoleNodeEntry {
     id: string;
     kind: 'agent' | 'parent';
     label: string;
+    /** 规划职责元数据；用于从责任标识反查局部修图的 node id。 */
+    responsibility?: NodeResponsibility;
     presetId: string | null;
     provider: string;
     model: string;
@@ -162,6 +164,8 @@ export interface CatalogGroupNodeEntry {
     id: string;
     kind: 'group';
     label: string;
+    /** 规划职责元数据；用于从责任标识反查局部修图的 node id。 */
+    responsibility?: NodeResponsibility;
     collabPrompt: string;
     memberIds: string[];
 }

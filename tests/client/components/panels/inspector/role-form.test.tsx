@@ -84,6 +84,7 @@ describe('角色表单模式下拉', () => {
       data: {
         presetId: 'standard',
         responsibility: {
+          planningId: 'plan-medical-review',
           id: 'R-search',
           purpose: '检索并整理医学文献',
           deliverable: '候选文献列表',
@@ -96,5 +97,6 @@ describe('角色表单模式下拉', () => {
     expect(container!.textContent).toContain('候选文献列表')
     expect(container!.textContent).toContain('文献检索 · 资料整理')
     expect(container!.textContent).toContain('R-search')
+    expect(container!.textContent).toContain('plan-medical-review')
   })
 })

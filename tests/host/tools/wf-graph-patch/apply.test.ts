@@ -188,13 +188,13 @@ describe('角色节点 data 补全（normalizeRoleNodeData）', () => {
           id: 'a1', kind: 'agent',
           data: {
             label: '检索',
-            responsibility: { id: ' R1 ', purpose: ' 检索资料 ', deliverable: ' 资料列表 ', requirementRefs: [' 搜集资料 ', '搜集资料'] },
+            responsibility: { planningId: ' plan-1 ', id: ' R1 ', purpose: ' 检索资料 ', deliverable: ' 资料列表 ', requirementRefs: [' 搜集资料 ', '搜集资料'] },
           },
         },
       }],
     })
     expect(roleDataOf(created.doc, 'a1').responsibility).toEqual({
-      id: 'R1', purpose: '检索资料', deliverable: '资料列表', requirementRefs: ['搜集资料'],
+      planningId: 'plan-1', id: 'R1', purpose: '检索资料', deliverable: '资料列表', requirementRefs: ['搜集资料'],
     })
 
     const updated = applyGraphOps({

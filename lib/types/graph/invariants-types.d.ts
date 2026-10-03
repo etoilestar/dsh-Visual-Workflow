@@ -14,6 +14,8 @@ export interface GraphIssue {
     nodeIds?: string[];
     /** 关联连线 id（可选）。 */
     lineIds?: string[];
+    /** 关联责任 id（可选；供规划者定位局部修复目标）。 */
+    responsibilityIds?: string[];
     /** 修复建议（模型自我修正的唯一通道；error 级必填，聚合层兜底补齐）。 */
     suggestion?: string;
 }

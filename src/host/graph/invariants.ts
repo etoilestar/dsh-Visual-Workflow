@@ -53,7 +53,8 @@ function levelRank(level: string): number {
 function issueKey(issue: GraphIssue): string {
   const nodes = [...(issue.nodeIds ?? [])].sort().join(',')
   const lines = [...(issue.lineIds ?? [])].sort().join(',')
-  return `${issue.level}|${issue.code}|${nodes}|${lines}|${issue.message}`
+  const responsibilities = [...(issue.responsibilityIds ?? [])].sort().join(',')
+  return `${issue.level}|${issue.code}|${nodes}|${lines}|${responsibilities}|${issue.message}`
 }
 
 /**
@@ -110,6 +111,7 @@ export function checkGraphInvariants(input: CheckGraphInput): GraphIssue[] {
       message: raw.message,
       ...(raw.nodeIds && raw.nodeIds.length > 0 ? { nodeIds: [...raw.nodeIds] } : {}),
       ...(raw.lineIds && raw.lineIds.length > 0 ? { lineIds: [...raw.lineIds] } : {}),
+      ...(raw.responsibilityIds ? { responsibilityIds: [...raw.responsibilityIds] } : {}),
       suggestion: escalated
         ? `${raw.suggestion ?? ''}（该拓扑已被元参数 forbiddenShapes 列为禁用）`.trim()
         : raw.suggestion,

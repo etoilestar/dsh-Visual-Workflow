@@ -15,6 +15,8 @@ export interface BaseNode {
 }
 /** 规划阶段写入的节点责任说明；不参与运行或调度。 */
 export interface NodeResponsibility {
+    /** 本轮规划标识，用于把用户需求、职责分析与落盘节点串联起来。 */
+    planningId?: string;
     /** 在同一工作流内用于追踪和局部定位责任的稳定标识。 */
     id: string;
     /** 节点存在的核心目的。 */

@@ -171,6 +171,7 @@ export declare const zh: {
     personaHint: string;
     responsibility: string;
     responsibilityId: string;
+    responsibilityPlanningId: string;
     responsibilityPurpose: string;
     responsibilityDeliverable: string;
     responsibilityRequirementRefs: string;

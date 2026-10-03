@@ -26,6 +26,8 @@ export interface GraphIssue {
   nodeIds?: string[]
   /** 关联连线 id（可选）。 */
   lineIds?: string[]
+  /** 关联责任 id（可选；供规划者定位局部修复目标）。 */
+  responsibilityIds?: string[]
   /** 修复建议（模型自我修正的唯一通道；error 级必填，聚合层兜底补齐）。 */
   suggestion?: string
 }
@@ -107,6 +109,8 @@ export const GRAPH_INVARIANT_CODES: readonly IssueCodeInfo[] = [
   { code: 'responsibilityMissing', level: 'warning', description: 'agent/group 节点缺少非空职责说明' },
   { code: 'responsibilityDeliverableMissing', level: 'warning', description: '节点已有职责但未说明产出' },
   { code: 'responsibilityDuplicate', level: 'warning', description: '不同节点的核心职责高度相似' },
+  { code: 'responsibilityIdMissing', level: 'warning', description: '节点职责缺少可用于局部定位的责任 id' },
+  { code: 'responsibilityIdDuplicate', level: 'warning', description: '责任 id 无法唯一定位 workflow node' },
   { code: 'requirementUncovered', level: 'warning', description: '调用方提供的需求引用没有被任何节点覆盖' },
 ] as const
 

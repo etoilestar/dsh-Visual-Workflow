@@ -194,14 +194,16 @@ export function normalizeRoleNodeData(raw: unknown): Record<string, unknown> {
 function normalizeResponsibility(raw: unknown): Record<string, unknown> | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const value = raw as Record<string, unknown>
+  const planningId = String(value.planningId ?? '').trim()
   const id = String(value.id ?? '').trim()
   const purpose = String(value.purpose ?? '').trim()
   const deliverable = String(value.deliverable ?? '').trim()
   const requirementRefs = Array.isArray(value.requirementRefs)
     ? value.requirementRefs.map((item) => String(item).trim()).filter(Boolean)
     : []
-  if (!id && !purpose && !deliverable && requirementRefs.length === 0) return undefined
+  if (!planningId && !id && !purpose && !deliverable && requirementRefs.length === 0) return undefined
   return {
+    ...(planningId ? { planningId } : {}),
     id,
     purpose,
     ...(deliverable ? { deliverable } : {}),

@@ -40,6 +40,14 @@ export interface NodeHandleDef {
   outputs: Handle[]
 }
 
+/** 按责任标识定位出的最小修图范围；连线仅含目标节点的直接上下游。 */
+export interface ResponsibilityRepairScope {
+  responsibilityId: string
+  nodeId: string
+  incomingLineIds: string[]
+  outgoingLineIds: string[]
+}
+
 /**
  * 连接点兼容矩阵（NODE_HANDLES）。
  *
@@ -107,6 +115,31 @@ export function makeNodeId(): string {
 /** 生成画布内唯一的连线 id。 */
 export function makeLineId(): string {
   return `line-${createHash('sha1').update(Math.random().toString(36) + Date.now().toString(36)).digest('hex').slice(0, 12)}`
+}
+
+/**
+ * 按责任标识定位节点与直接相邻连线。
+ * 标识缺失或不唯一时返回 null，避免局部修图误改到错误节点。
+ */
+export function responsibilityRepairScopeOf(
+  flow: Partial<WorkflowDocument>,
+  responsibilityId: string,
+): ResponsibilityRepairScope | null {
+  const id = String(responsibilityId ?? "").trim()
+  if (!id) return null
+  const matches = (flow.nodes ?? []).filter((node) =>
+    (node.kind === "agent" || node.kind === "group") && String(node.data.responsibility?.id ?? "").trim() === id,
+  )
+  if (matches.length !== 1) return null
+  const nodeId = matches[0]?.id
+  if (!nodeId) return null
+  const lines = flow.lines ?? []
+  return {
+    responsibilityId: id,
+    nodeId,
+    incomingLineIds: lines.filter((line) => line.target === nodeId).map((line) => line.id),
+    outgoingLineIds: lines.filter((line) => line.source === nodeId).map((line) => line.id),
+  }
 }
 
 /**

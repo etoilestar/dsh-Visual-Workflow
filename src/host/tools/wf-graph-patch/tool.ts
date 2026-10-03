@@ -120,7 +120,7 @@ export interface GraphPatchToolResult {
    * 「还剩多少规模」，否则只能靠撞护栏报错来试出边界。
    */
   budget: OrgBudget
-  warnings: Array<{ code: string; message: string }>
+  warnings: Array<{ code: string; message: string; nodeIds: string[]; responsibilityIds: string[]; suggestion?: string }>
   /** true = 本次补丁新建了模板（scope=template + create）；targetId 即新模板 id。 */
   newTemplate?: boolean
   /** mark_node 后本 run 已完成的闸门次数（不含首次编排）。 */
@@ -155,10 +155,16 @@ function markBudgetOf(
 }
 
 /** 检查器 issue → 返回体 warnings（warning 级不阻断）。 */
-function warningsOf(issues: GraphIssue[]): Array<{ code: string; message: string }> {
+function warningsOf(issues: GraphIssue[]): Array<{ code: string; message: string; nodeIds: string[]; responsibilityIds: string[]; suggestion?: string }> {
   return (issues ?? [])
     .filter((issue) => issue.level === 'warning')
-    .map((issue) => ({ code: issue.code, message: issue.message }))
+    .map((issue) => ({
+      code: issue.code,
+      message: issue.message,
+      nodeIds: [...(issue.nodeIds ?? [])],
+      responsibilityIds: [...(issue.responsibilityIds ?? [])],
+      ...(issue.suggestion ? { suggestion: issue.suggestion } : {}),
+    }))
 }
 
 /**
