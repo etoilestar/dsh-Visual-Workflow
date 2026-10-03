@@ -47,6 +47,7 @@ import {
   groupsOf,
   unknownOpsOf,
   type GraphPatchOp,
+  type GraphPatchArgs,
   type GraphPatchResult,
   type MarkPatchOp,
   type NewTemplateSpec,
@@ -61,6 +62,8 @@ import type { MilestoneMarkResult, MilestoneRunFacts, RunEntry } from '../../orc
 
 /** 工具层所需宿主能力（宿主 service 的最小结构适配；单测 fake）。 */
 export interface GraphPatchHost {
+  /** 按会话查询最近一次 `/arrange` 的规划上下文。 */
+  getPlanningContext?: (sessionId: string) => { planningId: string; sessionId: string } | undefined
   /** 数据层读写（模板/实例文档 + 运行事实源刷新）。 */
   store: {
     getFlowTemplate(id: string): Promise<WorkflowTemplate | null>
@@ -600,8 +603,15 @@ async function saveDoc(
 export async function executeGraphPatch(
   host: GraphPatchHost,
   sessionId: string,
-  args: { scope?: unknown; targetId?: unknown; ops?: unknown; expectRevision?: unknown; create?: unknown },
+  args: GraphPatchArgs,
 ): Promise<GraphPatchToolResult> {
+  if (args?.planningId !== undefined) {
+    const planningId = String(args.planningId)
+    const context = host.getPlanningContext?.(sessionId)
+    if (!context || context.sessionId !== sessionId || context.planningId !== planningId) {
+      throw new WfError("planningId 与当前会话的规划上下文不匹配", "WF_BAD_ARGS")
+    }
+  }
   const scope = String(args?.scope ?? '') as PatchScope
   if (scope !== 'template' && scope !== 'instance') {
     throw new WfError('scope 必须是 \'template\' 或 \'instance\'', 'WF_SCOPE_INVALID')
@@ -720,6 +730,7 @@ export function registerWfGraphPatch(
       'The response always carries a read-only budget (effective limits plus current usage and remaining room). ' +
       'Never pass node positions: coordinates are view-only and re-laid out by the canvas automatically.',
     parameters: {
+      planningId: { type: 'string', description: 'Planning task id emitted by /arrange. Omit for ordinary patches.' },
       scope: { type: 'string', required: true, enum: ['template', 'instance'] as const, description: 'template: plan a reusable workflow template; instance: adjust the current running instance.' },
       targetId: { type: 'string', description: 'Workflow template id (scope=template) or workflow/instance id (scope=instance). Required unless create is given; with create you may omit it to let the server mint a new id.' },
       create: {

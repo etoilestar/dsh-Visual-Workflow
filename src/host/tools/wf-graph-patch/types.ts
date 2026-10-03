@@ -12,6 +12,16 @@ import type { OrgMeta } from '../../shared/types.js'
 /** 补丁作用域：template = 工作流模板（规划期改模板）；instance = 工作流/服务实例（运行期改实例）。 */
 export type PatchScope = 'template' | 'instance'
 
+/** wf_graph_patch 顶层参数；planningId 只关联 Host 规划上下文。 */
+export interface GraphPatchArgs {
+  scope?: unknown
+  targetId?: unknown
+  ops?: unknown
+  expectRevision?: unknown
+  create?: unknown
+  planningId?: unknown
+}
+
 /**
  * 操作组名（两组）。
  * 元参数（组织预算）不在此列：它是约束改图方的硬护栏，被约束方不得自行调整，
