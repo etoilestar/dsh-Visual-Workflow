@@ -120,10 +120,13 @@ export const ORG_RULES_SOURCE_NOTE =
  */
 const PRE_SUBMIT_CHECKLIST = [
   '提交前自检（逐条确认，任一不成立就先补齐再提交）：',
+  '- 职责分析：在生成 agent/group 前，逐个明确其核心职责、存在理由、预期产出和对应需求；把结论写入 data.responsibility={id,purpose,deliverable?,requirementRefs?}，不要创建独立责任图。',
+  '- 职责边界：检查 purpose 是否缺失或重叠、deliverable 是否明确、用户目标是否由 requirementRefs 可追踪；问题只通过现有工作流节点修正。',
   '- 交付物清单：每份交付物都有对应节点，且节点之间没有重复职责。',
   '- 落盘路径与消费方：每份交付物写明写到哪个文件，以及谁会读它；没有消费方的终端产出不必建 ctx 线。',
   '- 读取通道：每个下游节点都知道去哪里读上游产出（有 ctx 连线，或上游产出已写成文件且路径已在任务里说明）。',
   '- 节点配置：每个 agent 节点都有 systemPrompt 与非空 presetId（工具组合）。',
+  '- 局部修图：用户修改某项职责时，先按 responsibility.id 定位既有节点，优先只 update_node_data 修改该节点；仅在必要时调整其直接上下游 edge，保持无关节点与连线不变，不重建整张图。',
 ].join('\n')
 
 /**

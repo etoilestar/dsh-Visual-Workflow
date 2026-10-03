@@ -171,8 +171,10 @@ export function applyRoleNodeCreateDefaults(raw: unknown): Record<string, unknow
 export function normalizeRoleNodeData(raw: unknown): Record<string, unknown> {
   const data = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>
   const presetId = data.presetId
+  const responsibility = normalizeResponsibility(data.responsibility)
   return {
     ...data,
+    ...(responsibility ? { responsibility } : {}),
     label: data.label === undefined || data.label === null ? '' : String(data.label),
     systemPrompt: data.systemPrompt === undefined || data.systemPrompt === null ? '' : String(data.systemPrompt),
     provider: data.provider === undefined || data.provider === null ? '' : String(data.provider),
@@ -186,6 +188,24 @@ export function normalizeRoleNodeData(raw: unknown): Record<string, unknown> {
     injectSystemPrompt: data.injectSystemPrompt !== false,
     injectToolSections: data.injectToolSections !== false,
     groupId: data.groupId ?? null,
+  }
+}
+
+function normalizeResponsibility(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const value = raw as Record<string, unknown>
+  const id = String(value.id ?? '').trim()
+  const purpose = String(value.purpose ?? '').trim()
+  const deliverable = String(value.deliverable ?? '').trim()
+  const requirementRefs = Array.isArray(value.requirementRefs)
+    ? value.requirementRefs.map((item) => String(item).trim()).filter(Boolean)
+    : []
+  if (!id && !purpose && !deliverable && requirementRefs.length === 0) return undefined
+  return {
+    id,
+    purpose,
+    ...(deliverable ? { deliverable } : {}),
+    ...(requirementRefs.length > 0 ? { requirementRefs: [...new Set(requirementRefs)] } : {}),
   }
 }
 
@@ -258,13 +278,15 @@ export function applyGraphOps(input: {
           else delete (node as { data?: unknown }).data
         }
         if (node.kind === 'group') {
-          const data = (raw.data ?? {}) as { label?: unknown; collabPrompt?: unknown; size?: unknown }
+          const data = (raw.data ?? {}) as { label?: unknown; collabPrompt?: unknown; size?: unknown; responsibility?: unknown }
+          const responsibility = normalizeResponsibility(data.responsibility)
           ;(node as unknown as { data: Record<string, unknown> }).data = {
             label: String(data.label ?? node.id),
             collabPrompt: String(data.collabPrompt ?? ''),
             memberIds: [],
             // 组卡片尺寸（视图数据；缺省与画布默认一致）
             size: (data.size as { w: number; h: number } | undefined) ?? { w: 300, h: 220 },
+            ...(responsibility ? { responsibility } : {}),
           }
         }
         doc.nodes.push(node)
@@ -336,6 +358,11 @@ export function applyGraphOps(input: {
           const next = { ...(target.data ?? {}), ...patch }
           // 成员关系只能经 set_group_members 维护；此处保守地忽略成员字段（防组内清单与节点不一致）
           delete next.memberIds
+          if ('responsibility' in patch) {
+            const responsibility = normalizeResponsibility(patch.responsibility)
+            if (responsibility) next.responsibility = responsibility
+            else delete next.responsibility
+          }
           // 角色节点：合并后再过一次规范化（补全被手改/导入数据抹掉的必填字段）
           target.data = isRoleNode ? normalizeRoleNodeData(next) : next
         }

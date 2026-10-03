@@ -169,6 +169,12 @@ export declare const zh: {
     label: string;
     persona: string;
     personaHint: string;
+    responsibility: string;
+    responsibilityId: string;
+    responsibilityPurpose: string;
+    responsibilityDeliverable: string;
+    responsibilityRequirementRefs: string;
+    responsibilityUnset: string;
     injectSystemPromptLabel: string;
     injectSystemPromptInjected: string;
     injectSystemPromptNotInjected: string;

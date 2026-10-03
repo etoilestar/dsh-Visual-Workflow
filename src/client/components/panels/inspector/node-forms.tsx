@@ -5,6 +5,7 @@
 import type { Dict } from '../../../i18n.js'
 import { Field } from '../form-field.js'
 import { NameField } from './form-primitives.js'
+import { ResponsibilityDetails } from './responsibility-details.js'
 
 /** 阶段属性只读（无描述字段，无保存按钮，需求 §4.2.5.1）。 */
 export function StageForm({ data, copy, nodeLabel }: { data: Record<string, unknown>; copy: Dict; nodeLabel: string }) {
@@ -33,6 +34,7 @@ export function GroupForm({ data, copy, members, onPatch, onLoadMd, onRemoveMemb
     <div>
       <h3>{copy.nodeKinds.group}</h3>
       <NameField data={data} copy={copy} onPatch={onPatch} />
+      <ResponsibilityDetails data={data} copy={copy} />
       <Field label={copy.collabPrompt}>
         <div className="wf-form-stack">
           <textarea

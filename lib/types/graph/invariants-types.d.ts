@@ -33,6 +33,8 @@ export interface CheckGraphInput {
     patchOps?: number;
     /** 父代理闸门已用次数（不含首次编排，D-21）；与 meta.milestoneMax 比对。 */
     milestoneUsed?: number;
+    /** 可选的需求引用全集；规划入口尚未持久化全集时省略，不执行覆盖检查。 */
+    requirementRefs?: readonly string[];
 }
 /** code 注册表条目。 */
 export interface IssueCodeInfo {

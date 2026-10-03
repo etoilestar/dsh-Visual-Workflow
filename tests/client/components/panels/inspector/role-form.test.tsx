@@ -78,4 +78,23 @@ describe('角色表单模式下拉', () => {
     await renderRoleForm({ data: { presetId: 'combo-a' } })
     expect(container!.textContent).toContain('3')
   })
+
+  it('责任调试信息：展示目标、产出、需求来源与责任 ID', async () => {
+    await renderRoleForm({
+      data: {
+        presetId: 'standard',
+        responsibility: {
+          id: 'R-search',
+          purpose: '检索并整理医学文献',
+          deliverable: '候选文献列表',
+          requirementRefs: ['文献检索', '资料整理'],
+        },
+      },
+    })
+    expect(container!.textContent).toContain(zh.responsibility)
+    expect(container!.textContent).toContain('检索并整理医学文献')
+    expect(container!.textContent).toContain('候选文献列表')
+    expect(container!.textContent).toContain('文献检索 · 资料整理')
+    expect(container!.textContent).toContain('R-search')
+  })
 })

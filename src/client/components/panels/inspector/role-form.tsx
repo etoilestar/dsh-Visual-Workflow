@@ -7,6 +7,7 @@ import type { Dict } from '../../../i18n.js'
 import type { PresetItem, ModelItem } from '../../../studio/studio-state.js'
 import { Field } from '../form-field.js'
 import { InputField, NameField, TextAreaField } from './form-primitives.js'
+import { ResponsibilityDetails } from './responsibility-details.js'
 
 export interface ComboLike { id: string; name: string; tools?: string[]; mcpServers?: string[] }
 /** 预设条目（与 studio-state PresetItem 同构，复用避免双份漂移）。 */
@@ -57,6 +58,7 @@ export function RoleForm({ data, copy, presets, models, combos, onPatch, onLoadM
     <div>
       <h3>{isParent ? copy.nodeKinds.parent : copy.nodeKinds.agent}</h3>
       <NameField data={data} copy={copy} onPatch={onPatch} />
+      <ResponsibilityDetails data={data} copy={copy} />
       <Field label={copy.persona}>
         <div className="wf-form-stack">
           <textarea

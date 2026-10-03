@@ -46,6 +46,8 @@ export interface CheckGraphInput {
   patchOps?: number
   /** 父代理闸门已用次数（不含首次编排，D-21）；与 meta.milestoneMax 比对。 */
   milestoneUsed?: number
+  /** 可选的需求引用全集；规划入口尚未持久化全集时省略，不执行覆盖检查。 */
+  requirementRefs?: readonly string[]
 }
 
 /** code 注册表条目。 */
@@ -102,6 +104,10 @@ export const GRAPH_INVARIANT_CODES: readonly IssueCodeInfo[] = [
   { code: 'roleNodeNoPreset', level: 'warning', description: '角色节点未配置工具组合（presetId 为空 = 运行期零工具）' },
   { code: 'roleNodeNoPrompt', level: 'warning', description: '角色节点未配置 System Prompt' },
   { code: 'namingConvention', level: 'warning', description: '节点名称未满足元参数约定的命名规则' },
+  { code: 'responsibilityMissing', level: 'warning', description: 'agent/group 节点缺少非空职责说明' },
+  { code: 'responsibilityDeliverableMissing', level: 'warning', description: '节点已有职责但未说明产出' },
+  { code: 'responsibilityDuplicate', level: 'warning', description: '不同节点的核心职责高度相似' },
+  { code: 'requirementUncovered', level: 'warning', description: '调用方提供的需求引用没有被任何节点覆盖' },
 ] as const
 
 /** code → 说明的反查表（文档与测试断言用）。 */

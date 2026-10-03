@@ -51,6 +51,7 @@ function agent(id: string, label = id, data: Record<string, unknown> = {}): Grap
       inputSchema: '',
       outputSchema: '',
       groupId: null,
+      responsibility: { id: `R-${id}`, purpose: `执行${label}任务`, deliverable: `${label}结果` },
       ...data,
     },
   }
@@ -104,8 +105,8 @@ function dbNode(id: string, data: Record<string, unknown> = {}): GraphNode {
 }
 
 /** 协作组节点。 */
-function groupNode(id: string, memberIds: string[]): GraphNode {
-  return { id, kind: 'group', position: { x: 0, y: 0 }, data: { label: id, collabPrompt: '', memberIds } }
+function groupNode(id: string, memberIds: string[], data: Record<string, unknown> = {}): GraphNode {
+  return { id, kind: 'group', position: { x: 0, y: 0 }, data: { label: id, collabPrompt: '', memberIds, responsibility: { id: `R-${id}`, purpose: `协调${id}`, deliverable: `${id}协作结果` }, ...data } }
 }
 
 /** 虚拟节点（P3：可选 data.role 区分「执行入口」与「里程碑闸门」）。 */
@@ -137,6 +138,7 @@ function check(input: {
   origin?: 'agent' | 'user'
   patchOps?: number
   milestoneUsed?: number
+  requirementRefs?: readonly string[]
 }): GraphIssue[] {
   return checkGraphInvariants({
     flow: input.flow,
@@ -144,6 +146,7 @@ function check(input: {
     ...(input.meta ? { meta: input.meta } : {}),
     ...(input.patchOps !== undefined ? { patchOps: input.patchOps } : {}),
     ...(input.milestoneUsed !== undefined ? { milestoneUsed: input.milestoneUsed } : {}),
+    ...(input.requirementRefs ? { requirementRefs: input.requirementRefs } : {}),
   })
 }
 
@@ -614,6 +617,37 @@ describe('规则矩阵（每个 code 一例）', () => {
     expect(issues.find((i) => i.code === 'roleNodeNoPreset')?.nodeIds).toEqual(['a1'])
     expect(issues.find((i) => i.code === 'roleNodeNoPrompt')?.nodeIds).toEqual(['a2'])
     expect(issues.filter((i) => i.level === 'error')).toEqual([])
+  })
+
+  it('responsibilityMissing / responsibilityDeliverableMissing：职责不完整只告警', () => {
+    const doc = flow(
+      [stage('s', 'start'), agent('a1', '分析', { responsibility: undefined }), agent('a2', '成稿', { responsibility: { id: 'R2', purpose: '撰写报告' } }), stage('e', 'end')],
+      [line('l1', 's', 'a1'), line('l2', 'a1', 'a2'), line('l3', 'a2', 'e')],
+    )
+    const issues = check({ flow: doc })
+    expect(issues.find((issue) => issue.code === 'responsibilityMissing')?.nodeIds).toEqual(['a1'])
+    expect(issues.find((issue) => issue.code === 'responsibilityDeliverableMissing')?.nodeIds).toEqual(['a2'])
+    expect(issues.filter((issue) => issue.code.startsWith('responsibility') && issue.level === 'error')).toEqual([])
+  })
+
+  it('responsibilityDuplicate：归一化后的高度相似职责提示重复但不合并节点', () => {
+    const doc = flow(
+      [stage('s', 'start'), agent('a1', '检索', { responsibility: { id: 'R1', purpose: '检索医学论文', deliverable: '论文列表' } }), agent('a2', '搜索', { responsibility: { id: 'R2', purpose: '搜索相关医学文献', deliverable: '文献列表' } }), stage('e', 'end')],
+      [line('l1', 's', 'a1'), line('l2', 'a1', 'a2'), line('l3', 'a2', 'e')],
+    )
+    const issues = check({ flow: doc })
+    expect(issues.find((issue) => issue.code === 'responsibilityDuplicate')?.nodeIds).toEqual(['a1', 'a2'])
+    expect(doc.nodes.map((node) => node.id)).toEqual(['s', 'a1', 'a2', 'e'])
+  })
+
+  it('requirementUncovered：仅在调用方提供需求全集时检查覆盖', () => {
+    const doc = flow(
+      [stage('s', 'start'), agent('a1', '检索', { responsibility: { id: 'R1', purpose: '检索资料', deliverable: '资料', requirementRefs: ['文献检索'] } }), stage('e', 'end')],
+      [line('l1', 's', 'a1'), line('l2', 'a1', 'e')],
+    )
+    expect(codes(check({ flow: doc }))).not.toContain('requirementUncovered')
+    const issues = check({ flow: doc, requirementRefs: ['文献检索', '生成报告'] })
+    expect(issues.find((issue) => issue.code === 'requirementUncovered')?.message).toContain('生成报告')
   })
 })
 

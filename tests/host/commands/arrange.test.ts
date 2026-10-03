@@ -146,6 +146,9 @@ describe('/arrange handler：只采集 + 注入，绝不改图', () => {
     expect(text).not.toContain(ORG_SOP_DESIGN_METHOD)
     expect(text).toContain(ORG_RULES_SOURCE_NOTE)
     expect(text).toContain('做一个内容生产流水线')
+    expect(text).toContain('data.responsibility')
+    expect(text).toContain('responsibility.id')
+    expect(text).toContain('保持无关节点与连线不变')
   })
 
   it('目标默认 create（新建模板）：提示词指引走 create 通路而非要求用户先给 targetId', () => {
