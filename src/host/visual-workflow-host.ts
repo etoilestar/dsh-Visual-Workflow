@@ -56,6 +56,7 @@ import { EmbeddingService } from './embedding/engine.js'
 import { ServiceManager } from './service/index.js'
 import { SchedulerEngine, SchedulerTaskStore } from './scheduler/index.js'
 import { CordisSessionProvider, sessionCwdResolver } from './sessions/session-provider.js'
+import { PlanningService, type PlanningContext, type RecordPlanningIntentInput } from './planning/index.js'
 
 export const VisualWorkflowHostServiceName = 'visualWorkflowHost'
 
@@ -65,6 +66,7 @@ export const VisualWorkflowHostServiceName = 'visualWorkflowHost'
  * 执行引擎（NodeAgentRunner）接管。
  */
 export class VisualWorkflowHost extends Service {
+  private readonly planningService: PlanningService
   /** FlowStore 实例（dataDir 落盘数据层）。 */
   readonly store: FlowStore
   /**
@@ -141,6 +143,7 @@ export class VisualWorkflowHost extends Service {
     super(ctx, VisualWorkflowHostServiceName)
     this.skipReconcile = options.skipReconcile === true
     this.store = new FlowStore(config.dataDir)
+    this.planningService = new PlanningService()
     this.assetStore = new AssetStore(config.dataDir)
     this.toolSwitches = new ToolSwitchStore(config.dataDir)
     this.agents = new CordisAgentHost(ctx)
@@ -229,6 +232,14 @@ export class VisualWorkflowHost extends Service {
   /** 按会话取根 Agent（wf_* 工具层提问/校验用；转发至 agents 适配）。 */
   getRootAgent(sessionId: string): RootAgentLike | null {
     return this.agents.getRootAgent(sessionId)
+  }
+
+  recordPlanningIntent(input: RecordPlanningIntentInput): PlanningContext {
+    return this.planningService.record(input)
+  }
+
+  getPlanningContext(sessionId: string): PlanningContext | undefined {
+    return this.planningService.getPlanningContext(sessionId)
   }
 
   /**
@@ -585,7 +596,10 @@ export class VisualWorkflowHost extends Service {
     // commands 服务未组合（headless / 模式二服务进程）时内部静默跳过，不影响既有行为。
     try {
       this.ctx.effect(
-        () => registerArrangeCommand(this.ctx, { systemLanguage: () => this.systemLanguage() }),
+        () => registerArrangeCommand(this.ctx, {
+          systemLanguage: () => this.systemLanguage(),
+          recordPlanningIntent: (input) => { this.recordPlanningIntent(input) },
+        }),
         'visualWorkflowHost.arrangeCommand',
       )
     } catch (error) {
@@ -626,6 +640,7 @@ export class VisualWorkflowHost extends Service {
     const ctx = this.ctx
     return {
       store: this.store,
+      getPlanningContext: (sessionId: string) => this.getPlanningContext(sessionId),
       // 资产缝：勘察工具只召回「资产 + 经验」（模版索引已按用户裁决移除）。资产库未就绪时
       // 每个方法都抛可行动错误（不返回空集，理由见 requireAssetStore）。
       assets: {

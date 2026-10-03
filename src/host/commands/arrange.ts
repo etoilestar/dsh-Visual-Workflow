@@ -66,6 +66,10 @@ export interface ArrangeCommandDeps {
   systemLanguage?: () => string
   /** 注入消息 id 生成缝（单测用确定性 id）。 */
   newMessageId?: () => string
+  /** 规划任务 id 生成缝。 */
+  newPlanningId?: () => string
+  /** Host 内存中的原始意图记录能力。 */
+  recordPlanningIntent?: (input: { planningId: string; sessionId: string; originalUserIntent: string }) => void
   /** 日志缝（注销失败告警；缺省静默）。 */
   logger?: { warn(message: string): void }
 }
@@ -74,12 +78,14 @@ export interface ArrangeCommandDeps {
  * 构建 `/arrange` 注入的规划提示词（纯函数）。
  * 目标固定为 create（新建模板）；既有目标的更新语义由提示词内的语法指引覆盖。
  */
-export function buildArrangePrompt(input: { userIntent: string; systemLanguage?: string }): string {
+export function buildArrangePrompt(input: { userIntent: string; planningId?: string; systemLanguage?: string }): string {
   const language = String(input.systemLanguage ?? '').trim()
-  return buildOrgPlanPrompt({
+  const prompt = buildOrgPlanPrompt({
     facts: { target: 'create', ...(language ? { systemLanguage: language } : {}) },
     dynamic: { userIntent: String(input.userIntent ?? '') },
   })
+  if (!input.planningId) return prompt
+  return `${prompt}\n\n本次规划任务 ID：\n${input.planningId}\n\n该 ID 仅用于规划过程追踪。不要写入 workflow。不要作为节点字段。不要修改。`
 }
 
 /** 命令失败文案：接收 Agent 未激活。 */
@@ -112,9 +118,13 @@ export function registerArrangeCommand(
       if (!agent || typeof followup !== 'function') {
         return { kind: 'error', text: ARRANGE_NO_AGENT }
       }
-      const intent = String(invocation?.rawInput ?? '').trim()
+      const originalUserIntent = String(invocation?.rawInput ?? '')
+      const intent = originalUserIntent.trim()
       if (!intent) return { kind: 'error', text: ARRANGE_USAGE }
-      const text = buildArrangePrompt({ userIntent: intent, systemLanguage: deps.systemLanguage?.() })
+      const sessionId = String(agent.id ?? '')
+      const planningId = deps.newPlanningId?.() ?? randomUUID()
+      deps.recordPlanningIntent?.({ planningId, sessionId, originalUserIntent })
+      const text = buildArrangePrompt({ userIntent: intent, planningId, systemLanguage: deps.systemLanguage?.() })
       followup.call(agent, {
         id: deps.newMessageId?.() ?? randomUUID(),
         role: 'user',
