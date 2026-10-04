@@ -53,8 +53,13 @@ export const ROLE_NODE_DATA_CONTRACT = [
   'presetId（必填，取值来自工具组合的 id 或官方 preset 的 id；为空则该节点运行期没有任何工具）；',
   'provider + model（provider 与 model 必须成对复制模型清单的两列：model 里的「组织/」前缀属于 model 本身，不是 provider；留空退化为宿主默认；清单外的取值会被补丁拒绝）；',
   'reasoning?（思考强度）；inputSchema?（该节点应收到什么）；outputSchema?（该节点最终回复的结构，下游 ctx 连线节点按它读取）。',
+  "responsibility?（规划责任元数据：{planningId?:string,id:string,purpose:string,deliverable?:string,requirementRefs?:string[]}；planningId 串联本轮用户需求与职责分析，id 用于后续局部修图定位，purpose 说明为何需要该节点）。",
   '画布所有的字段（retryLimit / reactLimit / promptFilePath / injectSystemPrompt / injectToolSections / sourceAssetId）不可通过改图工具配置：创建时忽略传入值，更新时保留现值。',
 ].join('')
+
+/** agent / group 共用的责任元数据写图说明。 */
+export const RESPONSIBILITY_DATA_CONTRACT =
+  "agent/group 节点应在 data.responsibility 写入 {planningId?:string,id:string,purpose:string,deliverable?:string,requirementRefs?:string[]}；这是节点责任与需求来源，不是独立责任图。修改既有责任时先从 wf_org_catalog 返回的节点 responsibility.id 唯一定位 node.id，只用 update_node_data 更新该节点，并仅在确有必要时 disconnect/connect 它的直接上下游连线；不得重建整图或改动无关节点与连线。"
 
 /** 提交规则：一次补丁怎么组织、哪些形态会被拒绝。 */
 export const PATCH_SUBMISSION_RULES = [
@@ -104,6 +109,7 @@ export const PATCH_CONTRACT_TEXT = [
   `标记组 op 形状：${MARK_OP_FIELD_TEXT}`,
   '',
   ROLE_NODE_DATA_CONTRACT,
+  RESPONSIBILITY_DATA_CONTRACT,
   '',
   ERROR_CODE_SEMANTICS,
 ].join('\n')

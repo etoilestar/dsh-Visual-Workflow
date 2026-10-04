@@ -179,6 +179,31 @@ describe('角色节点 data 补全（normalizeRoleNodeData）', () => {
     expect(data.model).toBe('')
   })
 
+  it('create_node / update_node_data：责任元数据随节点保存并可按局部补丁更新', () => {
+    const created = applyGraphOps({
+      doc: flowOf([stage('s', 'start')]),
+      ops: [{
+        op: 'create_node',
+        node: {
+          id: 'a1', kind: 'agent',
+          data: {
+            label: '检索',
+            responsibility: { planningId: ' plan-1 ', id: ' R1 ', purpose: ' 检索资料 ', deliverable: ' 资料列表 ', requirementRefs: [' 搜集资料 ', '搜集资料'] },
+          },
+        },
+      }],
+    })
+    expect(roleDataOf(created.doc, 'a1').responsibility).toEqual({
+      planningId: 'plan-1', id: 'R1', purpose: '检索资料', deliverable: '资料列表', requirementRefs: ['搜集资料'],
+    })
+
+    const updated = applyGraphOps({
+      doc: created.doc as unknown as WorkflowDocument,
+      ops: [{ op: 'update_node_data', nodeId: 'a1', data: { responsibility: { id: 'R1', purpose: '检索医学资料' } } }],
+    })
+    expect(roleDataOf(updated.doc, 'a1').responsibility).toEqual({ id: 'R1', purpose: '检索医学资料' })
+  })
+
   it('create_node：父代理传入的五个不可配置字段被剥离，一律写系统默认', () => {
     const { doc } = applyGraphOps({
       doc: flowOf([stage('s', 'start')]),

@@ -15,6 +15,7 @@
 // ── 图契约：连接点矩阵、通道配对与节点种类 ─────────────────────────────────
 export { CONDITION_TYPES, HANDLE_PAIRING, NODE_HANDLES, NODE_KINDS } from './model.js'
 export type { NodeHandleDef } from './model.js'
+export type { ResponsibilityNodeLookup, ResponsibilityRepairScope } from './model.js'
 
 // ── 图契约：节点/连线工厂与阶段节点硬编码名称 ───────────────────────────────
 export {
@@ -38,9 +39,11 @@ export {
   entryNodes,
   flowInEdges,
   flowOutEdges,
+  findNodeByResponsibilityId,
   lineById,
   nodeById,
   proxiesOf,
+  responsibilityRepairScopeOf,
   upstreamCtxNodeIds,
 } from './model.js'
 

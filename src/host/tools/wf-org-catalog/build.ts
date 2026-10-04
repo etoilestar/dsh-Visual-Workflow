@@ -357,6 +357,7 @@ function roleNodeEntry(node: RoleNode, roleAssetId?: string, roleVersionId?: num
     id: node.id,
     kind: node.kind,
     label: labelOf(node),
+    ...(data.responsibility ? { responsibility: structuredClone(data.responsibility) } : {}),
     presetId: trimmedOrNull(data.presetId),
     provider: textOf(data.provider),
     model: textOf(data.model),
@@ -400,6 +401,7 @@ function nodeEntryOf(
         id: node.id,
         kind: 'group',
         label: labelOf(node),
+        ...(node.data.responsibility ? { responsibility: structuredClone(node.data.responsibility) } : {}),
         collabPrompt: textOf(node.data.collabPrompt),
         memberIds: Array.isArray(node.data.memberIds) ? node.data.memberIds.map(textOf) : [],
       }

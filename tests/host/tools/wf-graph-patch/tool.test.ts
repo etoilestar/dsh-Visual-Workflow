@@ -1248,6 +1248,10 @@ describe('wf_graph_patch · create 新建模板', () => {
     })
     expect(result.ok).toBe(true)
     expect(result.warnings.some((w) => w.code === 'duplicateRoleLabel')).toBe(true)
+    expect(result.warnings.every((warning) => Array.isArray(warning.nodeIds) && Array.isArray(warning.responsibilityIds))).toBe(true)
+    expect(result.warnings.find((warning) => warning.code === 'responsibilityMissing')).toMatchObject({
+      nodeIds: ['a1'], responsibilityIds: [],
+    })
     expect(storeState.templates.has('tpl-warn')).toBe(true)
   })
 })

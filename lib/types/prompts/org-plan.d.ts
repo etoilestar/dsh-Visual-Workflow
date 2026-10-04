@@ -51,6 +51,8 @@ export interface OrgPlanPromptParams {
         userSop?: string;
         /** 「本次组织预算」文本（buildOrgBudgetText 输出；仅末段注入）。 */
         orgBudgetText?: string;
+        /** 可选局部规划目标；只允许重规划其对应节点与必要邻边。 */
+        targetResponsibilityId?: string;
     };
 }
 /**

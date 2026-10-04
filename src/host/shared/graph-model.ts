@@ -37,6 +37,29 @@ export interface BaseNode {
   position: { x: number; y: number }
 }
 
+/** 规划阶段写入的节点责任说明；不参与运行或调度。 */
+export interface NodeResponsibility {
+  /** 本轮规划标识，用于把用户需求、职责分析与落盘节点串联起来。 */
+  planningId?: string
+  /** 在同一工作流内用于追踪和局部定位责任的稳定标识。 */
+  id: string
+  /** 节点存在的核心目的。 */
+  purpose: string
+  /** 节点应产生的结果。 */
+  deliverable?: string
+  /** 该责任对应的用户需求片段。 */
+  requirementRefs?: string[]
+}
+
+/** 可跨 Host/Client 投影的非阻断校验提示。 */
+export interface WorkflowValidationWarning {
+  code: string
+  message: string
+  nodeIds: string[]
+  responsibilityIds: string[]
+  suggestion?: string
+}
+
 /**
  * 角色节点：父代理（kind='parent'）与子代理（kind='agent'）共用的数据形状。
  * Kind 收窄为 'parent' | 'agent'，二者合一为 RoleNode 判别。
@@ -47,6 +70,8 @@ export interface RoleNode extends BaseNode {
   data: {
     /** 名称（左侧栏截断展示）。 */
     label: string
+    /** 规划来源与职责边界；旧工作流可省略。 */
+    responsibility?: NodeResponsibility
     /** 系统提示词：场景独立生效，不继承父/子任何一方。 */
     systemPrompt: string
     /** 服务商（模型提供方，经宿主适配器解析）。 */
@@ -190,6 +215,8 @@ export interface GroupNode extends BaseNode {
   data: {
     /** 组名称（左侧栏/右侧属性栏展示）。 */
     label: string
+    /** 规划来源与职责边界；旧工作流可省略。 */
+    responsibility?: NodeResponsibility
     /** 协作 Prompt：追加到组内所有成员**首条用户消息（任务块）末尾**，不注入系统提示词；无论文本是否为空都默认列出组内全部成员 ID + 角色名。 */
     collabPrompt: string
     /** 组内成员节点 id 列表（成员为角色节点，并行启动，规则 3）。 */
@@ -338,6 +365,8 @@ export interface LastAgentPatch {
   at: string
   /** 本次补丁触碰的节点 id（新增/修改/删除的节点；画布据此显示角标）。 */
   nodeIds: string[]
+  /** 本次补丁产生的非阻断提示；供画布 Inspector 定位展示。 */
+  warnings?: WorkflowValidationWarning[]
 }
 
 /** 工作流文档（WorkflowDocument）：完整编排流程定义，关联画布所有节点与连线

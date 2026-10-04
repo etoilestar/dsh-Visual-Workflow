@@ -74,11 +74,14 @@ export interface ArrangeCommandDeps {
  * 构建 `/arrange` 注入的规划提示词（纯函数）。
  * 目标固定为 create（新建模板）；既有目标的更新语义由提示词内的语法指引覆盖。
  */
-export function buildArrangePrompt(input: { userIntent: string; systemLanguage?: string }): string {
+export function buildArrangePrompt(input: { userIntent: string; systemLanguage?: string; targetResponsibilityId?: string }): string {
   const language = String(input.systemLanguage ?? '').trim()
   return buildOrgPlanPrompt({
     facts: { target: 'create', ...(language ? { systemLanguage: language } : {}) },
-    dynamic: { userIntent: String(input.userIntent ?? '') },
+    dynamic: {
+      userIntent: String(input.userIntent ?? ''),
+      ...(String(input.targetResponsibilityId ?? '').trim() ? { targetResponsibilityId: String(input.targetResponsibilityId).trim() } : {}),
+    },
   })
 }
 

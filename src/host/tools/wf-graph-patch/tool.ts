@@ -55,7 +55,7 @@ import {
   type PatchOpFailure,
   type PatchScope,
 } from './types.js'
-import type { GraphNode, Line, WorkflowDocument, WorkflowTemplate } from '../../shared/graph-model.js'
+import type { GraphNode, Line, WorkflowDocument, WorkflowTemplate, WorkflowValidationWarning } from '../../shared/graph-model.js'
 import type { OrgBudget } from '../../shared/types.js'
 import type { MilestoneMarkResult, MilestoneRunFacts, RunEntry } from '../../orchestrator/index.js'
 
@@ -120,7 +120,7 @@ export interface GraphPatchToolResult {
    * 「还剩多少规模」，否则只能靠撞护栏报错来试出边界。
    */
   budget: OrgBudget
-  warnings: Array<{ code: string; message: string }>
+  warnings: WorkflowValidationWarning[]
   /** true = 本次补丁新建了模板（scope=template + create）；targetId 即新模板 id。 */
   newTemplate?: boolean
   /** mark_node 后本 run 已完成的闸门次数（不含首次编排）。 */
@@ -155,10 +155,16 @@ function markBudgetOf(
 }
 
 /** 检查器 issue → 返回体 warnings（warning 级不阻断）。 */
-function warningsOf(issues: GraphIssue[]): Array<{ code: string; message: string }> {
+function warningsOf(issues: GraphIssue[]): WorkflowValidationWarning[] {
   return (issues ?? [])
     .filter((issue) => issue.level === 'warning')
-    .map((issue) => ({ code: issue.code, message: issue.message }))
+    .map((issue) => ({
+      code: issue.code,
+      message: issue.message,
+      nodeIds: [...(issue.nodeIds ?? [])],
+      responsibilityIds: [...(issue.responsibilityIds ?? [])],
+      ...(issue.suggestion ? { suggestion: issue.suggestion } : {}),
+    }))
 }
 
 /**
@@ -342,6 +348,7 @@ async function runGraphGroup(
     origin: 'agent',
     at: new Date().toISOString(),
     nodeIds: [...new Set([...result.createdNodeIds, ...result.updatedNodeIds])],
+    warnings: warningsOf(issues),
   }
   const saved = await saveDoc(host, input, result.doc as unknown as WorkflowDocument)
   return {

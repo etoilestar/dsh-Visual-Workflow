@@ -15,6 +15,7 @@ import {
   ctxInEdges,
   dbInEdges,
   entryNodes,
+  findNodeByResponsibilityId,
   flowOutEdges,
   flowInEdges,
   isFlowLine,
@@ -32,6 +33,7 @@ import {
   nodeParticipatesInFlow,
   proxiesOf,
   proxyRoleOf,
+  responsibilityRepairScopeOf,
   stageLabel,
   upstreamCtxNodeIds,
 } from '../../../src/host/graph/index.js'
@@ -240,5 +242,47 @@ describe('闸门标记目标归一化（mainNodeIdOf）', () => {
     const flow = gateFlow('milestone')
     flow.nodes = flow.nodes.filter((n) => n.id !== 'p1')
     expect(mainNodeIdOf(flow, 'm1')).toBeNull()
+  })
+})
+
+describe('责任标识局部修图范围（responsibilityRepairScopeOf）', () => {
+  it('findNodeByResponsibilityId 返回 nodeId、节点 data 与责任元数据', () => {
+    const screen = newRoleNode('agent', 'screen')
+    screen.id = 'screen'
+    screen.data.responsibility = { planningId: 'plan-1', id: 'R-screen', purpose: '筛选证据', deliverable: '证据表' }
+    const lookup = findNodeByResponsibilityId(makeFlow([screen], []), ' R-screen ')
+    expect(lookup?.nodeId).toBe('screen')
+    expect(lookup?.node).toBe(screen)
+    expect(lookup?.responsibility).toEqual(screen.data.responsibility)
+  })
+
+  it('只返回目标节点和直接上下游连线，不包含无关节点与连线', () => {
+    const search = newRoleNode('agent', 'search')
+    const screen = newRoleNode('agent', 'screen')
+    const report = newRoleNode('agent', 'report')
+    search.id = 'search'
+    screen.id = 'screen'
+    report.id = 'report'
+    screen.data.responsibility = { id: 'R-screen', purpose: '筛选证据' }
+    const flow = makeFlow(
+      [search, screen, report],
+      [flowLine('l-search-screen', 'search', 'screen'), flowLine('l-screen-report', 'screen', 'report'), flowLine('l-unrelated', 'search', 'report')],
+    )
+    expect(responsibilityRepairScopeOf(flow, 'R-screen')).toEqual({
+      responsibilityId: 'R-screen',
+      nodeId: 'screen',
+      incomingLineIds: ['l-search-screen'],
+      outgoingLineIds: ['l-screen-report'],
+    })
+  })
+
+  it('责任标识缺失或重复时拒绝猜测目标', () => {
+    const first = newRoleNode('agent', 'first')
+    const second = newRoleNode('agent', 'second')
+    first.data.responsibility = { id: 'R-duplicate', purpose: '职责一' }
+    second.data.responsibility = { id: 'R-duplicate', purpose: '职责二' }
+    const flow = makeFlow([first, second], [])
+    expect(responsibilityRepairScopeOf(flow, 'missing')).toBeNull()
+    expect(responsibilityRepairScopeOf(flow, 'R-duplicate')).toBeNull()
   })
 })

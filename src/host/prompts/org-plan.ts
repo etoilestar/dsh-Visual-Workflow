@@ -76,6 +76,8 @@ export interface OrgPlanPromptParams {
     userSop?: string
     /** 「本次组织预算」文本（buildOrgBudgetText 输出；仅末段注入）。 */
     orgBudgetText?: string
+    /** 可选局部规划目标；只允许重规划其对应节点与必要邻边。 */
+    targetResponsibilityId?: string
   }
 }
 
@@ -120,10 +122,14 @@ export const ORG_RULES_SOURCE_NOTE =
  */
 const PRE_SUBMIT_CHECKLIST = [
   '提交前自检（逐条确认，任一不成立就先补齐再提交）：',
+  '- 职责分析：写图前先在本轮规划内部生成一次轻量中间结构 {planningId, responsibilities:[{id,purpose,deliverable,requirementRefs}]}；它只用于需求拆解，不落成独立节点、连线或责任图。',
+  '- 职责映射：再为每项 responsibility 创建或复用一个 agent/group，把同一 planningId 与 {id,purpose,deliverable,requirementRefs} 写入 node.data.responsibility，形成用户需求 → planningId → responsibility → node 的追踪链。',
+  '- 职责边界：检查 purpose 是否缺失或重叠、deliverable 是否明确；把用户意图拆成主要目标，并确认每个主要目标至少出现在一项 responsibility.requirementRefs 中。问题只通过现有工作流节点修正，不创建 requirement graph。',
   '- 交付物清单：每份交付物都有对应节点，且节点之间没有重复职责。',
   '- 落盘路径与消费方：每份交付物写明写到哪个文件，以及谁会读它；没有消费方的终端产出不必建 ctx 线。',
   '- 读取通道：每个下游节点都知道去哪里读上游产出（有 ctx 连线，或上游产出已写成文件且路径已在任务里说明）。',
   '- 节点配置：每个 agent 节点都有 systemPrompt 与非空 presetId（工具组合）。',
+  '- 局部修图：用户修改某项职责时，先读取既有图并按 responsibility.id 唯一定位 node.id；先给出 small/medium/large 范围与 wf_graph_patch proposal，等待用户确认后才提交。只为该 node 生成 update_node_data；遗漏步骤可在它的相邻流程边中 create_node 并重连；其他情况只调整直接上下游 edge。不得 create/remove 无关 node，不得改动无关 edge，不得重建整张图；标识缺失或不唯一时先向用户澄清，不能猜测目标。',
 ].join('\n')
 
 /**
@@ -187,6 +193,10 @@ function renderPlanDynamicState(dynamic: OrgPlanPromptParams['dynamic']): string
   const budget = String(dynamic.orgBudgetText ?? '').trim()
   if (budget) {
     lines.push('', budget)
+  }
+  const targetResponsibilityId = String(dynamic.targetResponsibilityId ?? '').trim()
+  if (targetResponsibilityId) {
+    lines.push('', '【局部规划目标】', `- targetResponsibilityId：${targetResponsibilityId}`, '- 只规划该责任对应节点及必要的直接上下游连线；输出 patch proposal 后等待用户确认。')
   }
   return lines.join('\n')
 }

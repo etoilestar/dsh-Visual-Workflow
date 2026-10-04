@@ -14,6 +14,8 @@ export interface GraphIssue {
     nodeIds?: string[];
     /** 关联连线 id（可选）。 */
     lineIds?: string[];
+    /** 关联责任 id（可选；供规划者定位局部修复目标）。 */
+    responsibilityIds?: string[];
     /** 修复建议（模型自我修正的唯一通道；error 级必填，聚合层兜底补齐）。 */
     suggestion?: string;
 }
@@ -33,6 +35,8 @@ export interface CheckGraphInput {
     patchOps?: number;
     /** 父代理闸门已用次数（不含首次编排，D-21）；与 meta.milestoneMax 比对。 */
     milestoneUsed?: number;
+    /** 可选的需求引用全集；规划入口尚未持久化全集时省略，不执行覆盖检查。 */
+    requirementRefs?: readonly string[];
 }
 /** code 注册表条目。 */
 export interface IssueCodeInfo {

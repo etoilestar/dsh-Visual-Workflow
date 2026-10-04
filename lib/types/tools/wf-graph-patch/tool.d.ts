@@ -1,6 +1,6 @@
 import { hasBlockingIssues } from '../../graph/index.js';
 import { type PatchScope } from './types.js';
-import type { GraphNode, Line, WorkflowDocument, WorkflowTemplate } from '../../shared/graph-model.js';
+import type { GraphNode, Line, WorkflowDocument, WorkflowTemplate, WorkflowValidationWarning } from '../../shared/graph-model.js';
 import type { OrgBudget } from '../../shared/types.js';
 import type { MilestoneMarkResult, MilestoneRunFacts, RunEntry } from '../../orchestrator/index.js';
 /** 工具层所需宿主能力（宿主 service 的最小结构适配；单测 fake）。 */
@@ -81,10 +81,7 @@ export interface GraphPatchToolResult {
      * 「还剩多少规模」，否则只能靠撞护栏报错来试出边界。
      */
     budget: OrgBudget;
-    warnings: Array<{
-        code: string;
-        message: string;
-    }>;
+    warnings: WorkflowValidationWarning[];
     /** true = 本次补丁新建了模板（scope=template + create）；targetId 即新模板 id。 */
     newTemplate?: boolean;
     /** mark_node 后本 run 已完成的闸门次数（不含首次编排）。 */

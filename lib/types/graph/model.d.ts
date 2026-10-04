@@ -4,6 +4,19 @@ export interface NodeHandleDef {
     inputs: Handle[];
     outputs: Handle[];
 }
+/** 按责任标识定位出的最小修图范围；连线仅含目标节点的直接上下游。 */
+export interface ResponsibilityRepairScope {
+    responsibilityId: string;
+    nodeId: string;
+    incomingLineIds: string[];
+    outgoingLineIds: string[];
+}
+/** responsibility.id 的唯一节点查询结果。 */
+export interface ResponsibilityNodeLookup {
+    nodeId: string;
+    node: RoleNode | GroupNode;
+    responsibility: NonNullable<RoleNode["data"]["responsibility"]>;
+}
 /**
  * 连接点兼容矩阵（NODE_HANDLES）。
  *
@@ -31,6 +44,12 @@ export declare const NODE_KINDS: NodeKind[];
 export declare function makeNodeId(): string;
 /** 生成画布内唯一的连线 id。 */
 export declare function makeLineId(): string;
+/**
+ * 按责任标识定位节点与直接相邻连线。
+ * 标识缺失或不唯一时返回 null，避免局部修图误改到错误节点。
+ */
+export declare function findNodeByResponsibilityId(flow: Partial<WorkflowDocument>, responsibilityId: string): ResponsibilityNodeLookup | null;
+export declare function responsibilityRepairScopeOf(flow: Partial<WorkflowDocument>, responsibilityId: string): ResponsibilityRepairScope | null;
 /**
  * 新建角色节点（父/子代理，数据形状见 shared RoleNode）。
  * 深拷贝解耦语义：工厂只产出空白默认值，由调用方把模板数据复制进来（§4.2.1）。

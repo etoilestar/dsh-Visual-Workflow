@@ -36,6 +36,7 @@ import {
   ruleRoleNodeConfigured,
 } from './invariants-rules-nodes.js'
 import { ruleDuplicateRoleLabel, ruleMetaLimits, ruleNamingConvention } from './invariants-rules-meta.js'
+import { ruleNodeResponsibilities } from './invariants-rules-responsibility.js'
 import type { CheckGraphInput, GraphIssue } from './invariants-types.js'
 
 // code 注册表与问题类型契约的出口在 invariants-types.ts；本文件只负责规则聚合。
@@ -52,7 +53,8 @@ function levelRank(level: string): number {
 function issueKey(issue: GraphIssue): string {
   const nodes = [...(issue.nodeIds ?? [])].sort().join(',')
   const lines = [...(issue.lineIds ?? [])].sort().join(',')
-  return `${issue.level}|${issue.code}|${nodes}|${lines}|${issue.message}`
+  const responsibilities = [...(issue.responsibilityIds ?? [])].sort().join(',')
+  return `${issue.level}|${issue.code}|${nodes}|${lines}|${responsibilities}|${issue.message}`
 }
 
 /**
@@ -90,6 +92,7 @@ export function checkGraphInvariants(input: CheckGraphInput): GraphIssue[] {
     ...ruleNodeDataFlowContract(input),
     ...ruleRoleNodeConfigured(input),
     ...ruleMilestoneProxy(input, dag),
+    ...ruleNodeResponsibilities(input),
     // 元参数与命名维度
     ...ruleDuplicateRoleLabel(input),
     ...ruleNamingConvention(input),
@@ -108,6 +111,7 @@ export function checkGraphInvariants(input: CheckGraphInput): GraphIssue[] {
       message: raw.message,
       ...(raw.nodeIds && raw.nodeIds.length > 0 ? { nodeIds: [...raw.nodeIds] } : {}),
       ...(raw.lineIds && raw.lineIds.length > 0 ? { lineIds: [...raw.lineIds] } : {}),
+      ...(raw.responsibilityIds ? { responsibilityIds: [...raw.responsibilityIds] } : {}),
       suggestion: escalated
         ? `${raw.suggestion ?? ''}（该拓扑已被元参数 forbiddenShapes 列为禁用）`.trim()
         : raw.suggestion,

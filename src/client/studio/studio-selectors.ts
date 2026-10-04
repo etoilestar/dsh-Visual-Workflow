@@ -5,7 +5,7 @@
 // editorData 的 kind 分发表单。
 
 import type { StudioState, EditorData, CanvasNode } from './studio-types.js'
-import type { WorkflowDocument, WorkflowTemplate } from '../../host/shared/graph-model.js'
+import type { WorkflowDocument, WorkflowTemplate, WorkflowValidationWarning } from '../../host/shared/graph-model.js'
 import type { ServiceState } from '../../host/shared/types.js'
 import type { WorkflowAssetDetail } from '../../host/shared/asset-types.js'
 
@@ -86,6 +86,15 @@ export function memberLabelOf(member: CanvasNode | undefined, memberId: string):
   return String((member?.data as { label?: unknown } | undefined)?.label ?? memberId)
 }
 
+function nodeValidationWarnings(state: StudioState, nodeId: string): unknown[] {
+  const document = currentFlowTemplateOf(state) ?? currentFlowOf(state) ?? currentServiceOf(state)
+  const warnings = (document as { lastPatch?: { warnings?: WorkflowValidationWarning[] } } | null)?.lastPatch?.warnings ?? []
+  return warnings.filter((warning) =>
+    warning.nodeIds.includes(nodeId)
+      && (warning.responsibilityIds.length > 0 || warning.code.startsWith("responsibility")),
+  )
+}
+
 /** 编辑器数据（右侧面板渲染源）。 */
 export function editorDataOf(state: StudioState): EditorData | null {
   const editor = state.editor
@@ -164,13 +173,19 @@ export function editorDataOf(state: StudioState): EditorData | null {
     const node = state.canvas.nodes.find((item) => item.id === editor.id)
     if (!node) return null
     const data = node.data
+    const validationWarnings = nodeValidationWarnings(state, node.id)
+    const inspectorData = {
+      ...data,
+      inspectorNodeId: node.id,
+      ...(validationWarnings.length > 0 ? { validationWarnings } : {}),
+    }
     if (node.kind === 'parent' || node.kind === 'agent') {
       // sourceAssetId 是「画布角色节点绑定到某个角色资产」的唯一事实（拖入资产时写入）：
       // 属性栏据此决定是否给出与左侧栏一致的回滚按钮
       const sourceAssetId = typeof data.sourceAssetId === 'string' ? data.sourceAssetId : ''
       return {
         kind: 'role',
-        data,
+        data: inspectorData,
         name: String(data.label ?? ''),
         nodeId: node.id,
         isParent: node.kind === 'parent',
@@ -186,7 +201,7 @@ export function editorDataOf(state: StudioState): EditorData | null {
         id: memberId,
         label: memberLabelOf(state.canvas.nodes.find((item) => item.id === memberId), memberId),
       }))
-      return { kind: 'group', data, name: String(data.label ?? ''), nodeId: node.id, members }
+      return { kind: 'group', data: inspectorData, name: String(data.label ?? ''), nodeId: node.id, members }
     }
     if (node.kind === 'start' || node.kind === 'end' || node.kind === 'pause') return { kind: 'stage', data, name: String(data.label ?? ''), nodeId: node.id }
     if (node.kind === 'proxy') {

@@ -146,6 +146,11 @@ describe('/arrange handler：只采集 + 注入，绝不改图', () => {
     expect(text).not.toContain(ORG_SOP_DESIGN_METHOD)
     expect(text).toContain(ORG_RULES_SOURCE_NOTE)
     expect(text).toContain('做一个内容生产流水线')
+    expect(text).toContain('data.responsibility')
+    expect(text).toContain('responsibility.id')
+    expect(text).toContain('responsibilities:[{id,purpose,deliverable,requirementRefs}]')
+    expect(text).toContain('不得改动无关 edge')
+    expect(text).toContain('标识缺失或不唯一时先向用户澄清')
   })
 
   it('目标默认 create（新建模板）：提示词指引走 create 通路而非要求用户先给 targetId', () => {
@@ -164,6 +169,13 @@ describe('/arrange handler：只采集 + 注入，绝不改图', () => {
     expect(withLang).toContain('必须使用中文')
     const without = buildArrangePrompt({ userIntent: 'x' })
     expect(without).not.toContain('必须使用')
+  })
+
+  it('可选 targetResponsibilityId 注入局部规划上下文并要求确认 proposal', () => {
+    const prompt = buildArrangePrompt({ userIntent: '增强综述撰写节点', targetResponsibilityId: ' R3 ' })
+    expect(prompt).toContain('targetResponsibilityId：R3')
+    expect(prompt).toContain('只规划该责任对应节点及必要的直接上下游连线')
+    expect(prompt).toContain('等待用户确认')
   })
 
   it('空意图：返回用法错误且不注入任何消息（不消耗模型回合）', () => {

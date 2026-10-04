@@ -282,6 +282,25 @@ describe('buildWorkflowDetail（骨架自足性）', () => {
     expect(group).toEqual({ id: 'g1', kind: 'group', label: '评审组', collabPrompt: '组员互相评审', memberIds: ['a1'] })
   })
 
+  it('角色与协作组骨架携带 responsibility，供规划者按责任标识反查 node id', () => {
+    const asset = workflowAssetDetailFixture()
+    const role = asset.nodes.find((node) => node.id === 'a1')
+    const group = asset.nodes.find((node) => node.id === 'g1')
+    if (role?.kind === 'agent') {
+      role.data.responsibility = { planningId: 'plan-1', id: 'R-analysis', purpose: '分析证据', deliverable: '证据摘要' }
+    }
+    if (group?.kind === 'group') {
+      group.data.responsibility = { planningId: 'plan-1', id: 'R-review', purpose: '协作评审', requirementRefs: ['质量复核'] }
+    }
+    const withResponsibilities = buildWorkflowDetail(asset)
+    expect(roleNodeOf(withResponsibilities, 'a1').responsibility).toEqual({
+      planningId: 'plan-1', id: 'R-analysis', purpose: '分析证据', deliverable: '证据摘要',
+    })
+    expect(withResponsibilities.nodes.find((node) => node.id === 'g1')).toMatchObject({
+      responsibility: { planningId: 'plan-1', id: 'R-review', purpose: '协作评审', requirementRefs: ['质量复核'] },
+    })
+  })
+
   it('虚拟节点给出引用主节点与闸门角色', () => {
     const proxy = detail.nodes.find((node) => node.id === 'p1')
     expect(proxy).toEqual({ id: 'p1', kind: 'proxy', label: '里程碑复核', proxySourceId: 'a1', role: 'milestone' })
