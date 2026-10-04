@@ -82,6 +82,7 @@ describe('角色表单模式下拉', () => {
   it('责任调试信息：展示目标、产出、需求来源与责任 ID', async () => {
     await renderRoleForm({
       data: {
+        inspectorNodeId: 'evidence-screening',
         presetId: 'standard',
         responsibility: {
           planningId: 'plan-medical-review',
@@ -93,6 +94,7 @@ describe('角色表单模式下拉', () => {
         validationWarnings: [{
           code: 'RESPONSIBILITY_OVERLAP',
           message: '职责可能与 Evidence Retrieval 重叠。',
+          suggestion: '重新规划该节点',
         }],
       },
     })
@@ -105,5 +107,8 @@ describe('角色表单模式下拉', () => {
     expect(container!.textContent).toContain(zh.responsibilityWarnings)
     expect(container!.textContent).toContain('RESPONSIBILITY_OVERLAP')
     expect(container!.textContent).toContain('职责可能与 Evidence Retrieval 重叠。')
+    expect(container!.textContent).toContain('evidence-screening')
+    expect(container!.textContent).toContain('重新规划该节点')
+    expect(container!.textContent).toContain(zh.responsibilityRepairAvailable)
   })
 })

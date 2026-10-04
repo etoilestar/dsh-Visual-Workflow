@@ -51,7 +51,7 @@ export interface ResponsibilityRepairScope {
 /** responsibility.id 的唯一节点查询结果。 */
 export interface ResponsibilityNodeLookup {
   nodeId: string
-  nodeData: RoleNode["data"] | GroupNode["data"]
+  node: RoleNode | GroupNode
   responsibility: NonNullable<RoleNode["data"]["responsibility"]>
 }
 
@@ -140,7 +140,7 @@ export function findNodeByResponsibilityId(
   if (matches.length !== 1) return null
   const node = matches[0]
   if (!node || (node.kind !== "agent" && node.kind !== "group") || !node.data.responsibility) return null
-  return { nodeId: node.id, nodeData: node.data, responsibility: node.data.responsibility }
+  return { nodeId: node.id, node, responsibility: node.data.responsibility }
 }
 
 export function responsibilityRepairScopeOf(

@@ -14,7 +14,7 @@ export interface ResponsibilityRepairScope {
 /** responsibility.id 的唯一节点查询结果。 */
 export interface ResponsibilityNodeLookup {
     nodeId: string;
-    nodeData: RoleNode["data"] | GroupNode["data"];
+    node: RoleNode | GroupNode;
     responsibility: NonNullable<RoleNode["data"]["responsibility"]>;
 }
 /**

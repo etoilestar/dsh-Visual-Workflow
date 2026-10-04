@@ -174,7 +174,11 @@ export function editorDataOf(state: StudioState): EditorData | null {
     if (!node) return null
     const data = node.data
     const validationWarnings = nodeValidationWarnings(state, node.id)
-    const inspectorData = validationWarnings.length > 0 ? { ...data, validationWarnings } : data
+    const inspectorData = {
+      ...data,
+      inspectorNodeId: node.id,
+      ...(validationWarnings.length > 0 ? { validationWarnings } : {}),
+    }
     if (node.kind === 'parent' || node.kind === 'agent') {
       // sourceAssetId 是「画布角色节点绑定到某个角色资产」的唯一事实（拖入资产时写入）：
       // 属性栏据此决定是否给出与左侧栏一致的回滚按钮

@@ -62,6 +62,7 @@ export interface ArrangeCommandDeps {
 export declare function buildArrangePrompt(input: {
     userIntent: string;
     systemLanguage?: string;
+    targetResponsibilityId?: string;
 }): string;
 /** 命令失败文案：接收 Agent 未激活。 */
 export declare const ARRANGE_NO_AGENT = "\u5F53\u524D\u4F1A\u8BDD\u4E0D\u53EF\u7528\u4E8E\u7F16\u6392\u89C4\u5212\uFF08\u63A5\u6536 Agent \u672A\u6FC0\u6D3B\uFF09\u3002";

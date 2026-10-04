@@ -14,12 +14,19 @@ export function ResponsibilityDetails({ data, copy }: { data: Record<string, unk
       const warning = item as Record<string, unknown>
       const message = String(warning.message ?? "").trim()
       if (!message) return []
-      return [{ code: String(warning.code ?? "").trim(), message }]
+      return [{
+        code: String(warning.code ?? "").trim(),
+        message,
+        suggestion: String(warning.suggestion ?? "").trim(),
+      }]
     })
     : []
   return (
     <div className="wf-form-stack">
       <h4>{copy.responsibility}</h4>
+      {String(data.inspectorNodeId ?? "").trim()
+        ? <span className="wf-hint">{copy.responsibilityNodeId}: {String(data.inspectorNodeId)}</span>
+        : null}
       {String(responsibility?.planningId ?? "").trim()
         ? <span className="wf-hint">{copy.responsibilityPlanningId}: {String(responsibility?.planningId)}</span>
         : null}
@@ -40,14 +47,20 @@ export function ResponsibilityDetails({ data, copy }: { data: Record<string, unk
         : null}
       {warnings.length > 0 ? (
         <div className="wf-form-stack" role="status">
-          <strong>{copy.responsibilityWarnings}</strong>
+          <strong>{copy.responsibilityValidationStatus}: {copy.responsibilityWarnings}</strong>
           {warnings.map((warning, index) => (
             <span key={`${warning.code}-${index}`} className="wf-hint">
               {warning.code ? `[${warning.code}] ` : ""}{warning.message}
+              {warning.suggestion ? ` ${copy.responsibilitySuggestion}: ${warning.suggestion}` : ""}
             </span>
           ))}
+          {String(responsibility?.id ?? "").trim()
+            ? <strong>{copy.responsibilityRepairAvailable}</strong>
+            : null}
         </div>
-      ) : null}
+      ) : responsibility
+        ? <span className="wf-hint">{copy.responsibilityValidationStatus}: {copy.responsibilityValidationOk}</span>
+        : null}
     </div>
   )
 }

@@ -171,6 +171,13 @@ describe('/arrange handler：只采集 + 注入，绝不改图', () => {
     expect(without).not.toContain('必须使用')
   })
 
+  it('可选 targetResponsibilityId 注入局部规划上下文并要求确认 proposal', () => {
+    const prompt = buildArrangePrompt({ userIntent: '增强综述撰写节点', targetResponsibilityId: ' R3 ' })
+    expect(prompt).toContain('targetResponsibilityId：R3')
+    expect(prompt).toContain('只规划该责任对应节点及必要的直接上下游连线')
+    expect(prompt).toContain('等待用户确认')
+  })
+
   it('空意图：返回用法错误且不注入任何消息（不消耗模型回合）', () => {
     const { ctx, registered } = makeCtx()
     registerArrangeCommand(ctx)

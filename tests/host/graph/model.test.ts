@@ -252,7 +252,7 @@ describe('责任标识局部修图范围（responsibilityRepairScopeOf）', () =
     screen.data.responsibility = { planningId: 'plan-1', id: 'R-screen', purpose: '筛选证据', deliverable: '证据表' }
     const lookup = findNodeByResponsibilityId(makeFlow([screen], []), ' R-screen ')
     expect(lookup?.nodeId).toBe('screen')
-    expect(lookup?.nodeData).toBe(screen.data)
+    expect(lookup?.node).toBe(screen)
     expect(lookup?.responsibility).toEqual(screen.data.responsibility)
   })
 
