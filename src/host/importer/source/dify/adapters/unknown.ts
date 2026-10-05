@@ -1,0 +1,3 @@
+import type { SourceNodeAdapter } from "../../registry.js"
+import { normalizeNode, readDifyNode } from "./shared.js"
+export const unknownAdapter: SourceNodeAdapter = { supports: (node) => readDifyNode(node) !== undefined, normalize: (node, context) => normalizeNode(node, context, "unknown") }

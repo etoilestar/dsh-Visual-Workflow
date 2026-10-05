@@ -117,8 +117,8 @@ describe('T-001 包契约（依赖约束，W-05）', () => {
     expect(deepseek).toEqual([])
   })
 
-  it('dependencies 仅含 @huggingface/transformers', () => {
-    expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual(['@huggingface/transformers'])
+  it("dependencies 仅含获准的运行时依赖", () => {
+    expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual(["@huggingface/transformers", "yaml"])
   })
 
   it('optionalDependencies 仅 mysql2/pg（服务器数据库驱动，惰性加载）', () => {

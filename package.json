@@ -47,7 +47,8 @@
     "@deepseek-ai/schemastery": "*"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0"
+    "@huggingface/transformers": "^4.2.0",
+    "yaml": "^2.8.1"
   },
   "optionalDependencies": {
     "mysql2": "^3.15.0",
