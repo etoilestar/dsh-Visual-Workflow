@@ -77,23 +77,6 @@ export class RuntimeLifecycle extends RuntimeObserve {
     return true
   }
 
-  async recordModelRoute(agentId: string, route: unknown): Promise<void> {
-    const value = route as { provider?: unknown; model?: unknown } | null
-    if (typeof value?.provider !== "string" || typeof value.model !== "string") return
-    const parent = this.activeRunForSession(agentId)
-    const child = this.runForChild(agentId)
-    const entry = parent ?? child
-    if (!entry) return
-    const meta = this.childMetaFor(agentId)
-    if (parent) entry.snapshot.parentRoute = { provider: value.provider, model: value.model }
-    else if (meta) {
-      const node = entry.snapshot.nodes.find((item) => item.nodeId === meta.nodeId)
-      if (node) setNodeStatus(entry.snapshot, node.nodeId, node.status, { provider: value.provider, model: value.model, now: this.now() })
-    }
-    this.log().info(JSON.stringify({ runId: entry.snapshot.id, nodeId: meta?.nodeId, childId: child ? agentId : undefined, phase: "model_request", role: parent ? "parent" : "child", provider: value.provider, model: value.model }))
-    await this.persistWarn(entry)
-  }
-
   async recordChildError(childId: string, error: unknown): Promise<void> {
     const entry = this.runForChild(childId)
     const meta = this.childMetaFor(childId)

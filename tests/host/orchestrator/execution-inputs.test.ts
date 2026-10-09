@@ -69,7 +69,8 @@ describe('explicit execution inputs and artifacts', () => {
   })
 
   it('test_completed_reply_does_not_replace_actual_output_file', async () => {
-    const h = await makeHarness(undefined, { workingDirectory: async () => h.dir })
+    const logs: string[] = []
+    const h = await makeHarness(undefined, { workingDirectory: async () => h.dir, logger: { info: (message) => logs.push(message), warn: () => {}, debug: () => {} } })
     const flow = makeFlow()
     const node = flow.nodes.find((node) => node.id === 'n-a1')!
     if (node.kind !== 'agent') throw new Error('fixture')
@@ -78,10 +79,24 @@ describe('explicit execution inputs and artifacts', () => {
     await h.runtime.wfRunNode(caller, { nodeId: node.id })
     await h.runtime.handleSubagentEnd({ id: 'child-1', stopReason: 'completed', lastAssistantMessage: [{ type: 'text', text: '报告已生成 report.md' }] })
     expect((await h.store.getRun('run-1'))!.nodes.find((entry) => entry.nodeId === node.id)).toMatchObject({ status: 'fail', failure: { code: 'WF_OUTPUT_FILE_MISSING' } })
+    expect(logs.map((message) => JSON.parse(message)).find((event) => event.phase === 'settled')).toMatchObject({ nodeId: node.id, errorCode: 'WF_OUTPUT_FILE_MISSING', status: 'fail' })
     await h.runtime.wfRunNode(caller, { nodeId: node.id })
     await writeFile(join(h.dir, 'report.md'), '# 实际报告')
     await h.runtime.handleSubagentEnd({ id: 'child-2', stopReason: 'completed' })
     expect((await h.store.getRun('run-1'))!.nodes.find((entry) => entry.nodeId === node.id)).toMatchObject({ status: 'ok', attempts: 2, artifacts: [{ path: join(h.dir, 'report.md'), size: Buffer.byteLength('# 实际报告') }] })
+  })
+
+  it('test_parent_success_claim_cannot_override_failed_declared_artifact', async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    const node = flow.nodes.find((node) => node.id === 'n-a1')!
+    if (node.kind !== 'agent') throw new Error('fixture')
+    node.data.execution = { outputFiles: [join(h.dir, 'missing.md')] }
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: node.id })
+    await h.runtime.handleSubagentEnd({ id: 'child-1', stopReason: 'completed', lastAssistantMessage: [{ type: 'text', text: '已生成' }] })
+    await h.runtime.wfFinish(caller, { status: 'completed', summary: '全部成功' })
+    expect((await h.store.getRun('run-1'))!).toMatchObject({ status: 'failed', summary: expect.stringContaining('n-a1'), termination: { source: 'parent_finish' } })
   })
 
   it('test_full_successful_ctx_checkpoint_preserved_without_implicit_flow_context', async () => {

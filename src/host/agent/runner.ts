@@ -690,6 +690,7 @@ export class NodeAgentRunner implements NodeRunner {
       disabledTools: await this.deps.toolSwitches?.(),
       ...(input.mode ? { mode: input.mode } : {}),
     })
+    this.deps.logger?.info(JSON.stringify({ runId: input.runId, nodeId: node.id, attempt: input.attempt, phase: 'tool_policy', status: 'resolved', toolCount: tools.length }))
     const collabPrompt = String(input.collabPrompt ?? '').trim()
     // 角色 Prompt 实际注入文本（.md 路径设置时读取文件当前内容；未设置用内联文本）
     const rolePrompt = await resolveRolePrompt(node)
@@ -700,7 +701,7 @@ export class NodeAgentRunner implements NodeRunner {
     if (existing && existing.signature === signature) return { childId: existing.childId, created: false }
 
     const provider = detectSubagentProvider(subagents)
-    if (!provider) throw new Error('没有可用的子代理 provider（预期 spawn 或 fork）')
+    if (!provider) throw new Error('没有可用的隔离子代理 provider（预期 spawn；fork 会继承父历史，不能用于独立节点）')
     const agentOptions: { provider?: string; model?: string } = {}
     if (node.data?.provider) agentOptions.provider = node.data.provider
     if (node.data?.model) agentOptions.model = node.data.model

@@ -366,6 +366,9 @@ export const zh = {
   historyEmpty: '还没有运行记录',
   resumedFrom: '续跑自',
   resumeFromNode: '断点节点',
+  runDiagnostic: '运行诊断',
+  runAttempt: '尝试',
+  runTermination: '终止来源',
   resumeRun: '恢复运行',
   // 启动时开启新会话（仅模板态显示；创建实例时的一次性临时选项，不持久化到模板/实例文档）
   newSession: '开启新会话',
@@ -827,6 +830,9 @@ export const en: Dict = {
   historyEmpty: 'No run records yet',
   resumedFrom: 'resumed from',
   resumeFromNode: 'checkpoint',
+  runDiagnostic: 'Run diagnostics',
+  runAttempt: 'Attempt',
+  runTermination: 'Termination source',
   resumeRun: 'Resume',
   // Start in a new session (template-only; one-shot option at instance creation, never persisted)
   newSession: 'Start in new session',

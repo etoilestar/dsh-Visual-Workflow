@@ -502,7 +502,7 @@ describe('NodeAgentRunner 创建/复用/派发', () => {
     const h3 = await makeHarness()
     await h3.store.saveToolCombo({ id: 'combo-c1', name: 'c1', tools: ['read'], mcpServers: [] })
     h3.subagents.providers = []
-    await expect(h3.runner.ensureNodeChild(taskInput())).rejects.toThrow(/没有可用的子代理 provider/)
+    await expect(h3.runner.ensureNodeChild(taskInput())).rejects.toThrow(/没有可用的隔离子代理 provider/)
   })
 
   it('startNodeTask 复用派发：走 sendMessage（相邻 Agent 通道，signal 透传），立即返回', async () => {

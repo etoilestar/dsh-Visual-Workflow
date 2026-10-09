@@ -98,7 +98,8 @@ export class RuntimeObserve extends RuntimeComm {
       // （「组内全部 ok -> 组卡片记为 ok」；只做回显，不干预父代理调度）
       if (completed) await this.markGroupOkIfComplete(entry, meta.nodeId)
       await this.persistWarn(entry)
-      this.log().info(JSON.stringify({ runId: s.id, nodeId: meta.nodeId, childId, attempt: s.nodes.find((node) => node.nodeId === meta.nodeId)?.attempts, phase: "settled", status: finalStatus, stopReason, errorCode: completed ? undefined : "WF_CHILD_EXECUTION_FAILED" }))
+      const settledNode = s.nodes.find((node) => node.nodeId === meta.nodeId)
+      this.log().info(JSON.stringify({ runId: s.id, nodeId: meta.nodeId, childId, attempt: settledNode?.attempts, phase: "settled", status: finalStatus, stopReason, errorCode: settledNode?.failure?.code }))
       // 唤醒阻塞等待（wait:true；与 subagent/end 共用同一完成通道）。armed 视同完成。
       const waitKey = `${s.id}:${meta.nodeId}`
       const waiter = entry.waiters.get(waitKey)

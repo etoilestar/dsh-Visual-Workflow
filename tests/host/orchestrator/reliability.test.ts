@@ -5,6 +5,42 @@ import { caller, cleanupTempDirs, makeHarness, makeFlow, start, stage, agent, gr
 afterEach(cleanupTempDirs)
 
 describe("runtime failure evidence", () => {
+  it('test_first_child_request_before_registration_preserves_actual_route', async () => {
+    const h = await makeHarness()
+    await start(h, makeFlow())
+    await h.runtime.recordModelRoute('session-1', { provider: 'parent-provider', model: 'parent-model' })
+    h.runner.startNodeTask = async () => {
+      await h.runtime.recordModelRoute('early-child', { provider: 'child-provider', model: 'actual-child-model' }, { pendingChild: true })
+      return { childId: 'early-child', created: true }
+    }
+    await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
+    const snapshot = (await h.store.getRun('run-1'))!
+    expect(snapshot.parentRoute).toEqual({ provider: 'parent-provider', model: 'parent-model' })
+    expect(snapshot.nodes.find((node) => node.nodeId === 'n-a1')).toMatchObject({ provider: 'child-provider', model: 'actual-child-model', attemptHistory: [{ childId: 'early-child', provider: 'child-provider', model: 'actual-child-model' }] })
+  })
+
+  it('test_team_partial_creation_records_started_failed_and_unattempted_members', async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.nodes = [stage('s', 'start'), groupNode('g', '团队', ['a', 'b', 'c']), ...['a', 'b', 'c'].map((id) => agent(id, id, { groupId: 'g' })), stage('e', 'end')]
+    flow.lines = [{ id: 'sg', source: 's', target: 'g', sourceHandle: 'flow-out', targetHandle: 'flow-in' }, { id: 'ge', source: 'g', target: 'e', sourceHandle: 'flow-out', targetHandle: 'flow-in' }]
+    h.runner.teamEnabled = true
+    h.runner.startGroupTask = async (input) => {
+      await input.onMemberStarting?.('a')
+      await input.onMemberStarted?.({ nodeId: 'a', target: 'm-a', childId: 'started-a', reused: false })
+      await input.onMemberStarting?.('b')
+      throw new Error('second member initialization failed')
+    }
+    await start(h, flow)
+    await expect(h.runtime.wfRunNode(caller, { nodeId: 'g' })).rejects.toThrow('second member')
+    const snapshot = (await h.store.getRun('run-1'))!
+    expect(snapshot.nodes.find((node) => node.nodeId === 'a')).toMatchObject({ status: 'running', attempts: 1, childId: 'started-a' })
+    expect(snapshot.nodes.find((node) => node.nodeId === 'b')).toMatchObject({ status: 'fail', attempts: 1, failure: { code: 'WF_TEAM_START_FAILED' } })
+    expect(snapshot.nodes.find((node) => node.nodeId === 'c')).toMatchObject({ status: 'pending', attempts: 0 })
+    expect(h.runtime.childMetaFor('started-a')?.nodeId).toBe('a')
+    await h.runtime.handleSubagentEnd({ id: 'started-a', stopReason: 'completed', lastAssistantMessage: [{ type: 'text', text: '真实成员产出' }] })
+    expect((await h.store.getRun('run-1'))!.nodes.find((node) => node.nodeId === 'a')).toMatchObject({ status: 'armed', output: '真实成员产出' })
+  })
   it("test_child_start_failure_persisted_with_attempt_and_phase", async () => {
     const h = await makeHarness()
     await start(h, makeFlow())

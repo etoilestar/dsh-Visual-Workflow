@@ -169,6 +169,8 @@ export class RuntimeExecute extends RuntimeLaunch {
       systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
     })
       const { childId, replacedChildId } = await this.deps.runner.startNodeTask({
+        runId: run.snapshot.id,
+        attempt,
         sessionId: run.snapshot.sessionId,
         flowId: run.snapshot.flowId,
         mode: run.snapshot.mode,
@@ -195,6 +197,7 @@ export class RuntimeExecute extends RuntimeLaunch {
       run.inflight.add(childId)
       this.childIndex.set(childId, { sessionId: run.snapshot.sessionId, flowId: run.snapshot.flowId, nodeId: resolvedNodeId })
       this.childByNode.set(resolvedNodeId, childId)
+      this.applyPendingChildRoute(run, resolvedNodeId, childId)
       await this.persistWarn(run)
       this.log().info(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, childId, attempt, phase: "child_execute", status: "started" }))
       if (!waitRequested) return { nodeId: resolvedNodeId, status: 'started', childId }
@@ -330,11 +333,13 @@ export class RuntimeExecute extends RuntimeLaunch {
       run.inflight.add(member.childId)
       this.childIndex.set(member.childId, { sessionId, flowId: run.snapshot.flowId, nodeId: member.nodeId })
       this.childByNode.set(member.nodeId, member.childId)
+      this.applyPendingChildRoute(run, member.nodeId, member.childId)
       await this.persistWarn(run)
     }
     let result: GroupStartResult | null
     try {
       result = await startGroup.call(runner, {
+        runId: run.snapshot.id,
         sessionId,
         flowId: run.snapshot.flowId,
         mode: 'mode1',
@@ -409,9 +414,16 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
     const snapshot = run.snapshot
     if (snapshot.status !== 'running') return { ok: true, runId: snapshot.id, status: snapshot.status, idempotent: true }
-    const isFailed = args?.status === 'failed'
+    // 声明的机器契约已经失败时，父代理的成功文字不能覆盖失败事实。
+    const requiredFailures = snapshot.nodes.filter((record) => {
+      if (record.status !== 'fail') return false
+      const node = nodeById(run.baseFlow, record.nodeId)
+      return node?.kind === 'agent' && node.data.execution !== undefined
+    })
+    const isFailed = args?.status === 'failed' || requiredFailures.length > 0
     snapshot.status = isFailed ? 'failed' : 'completed'
     snapshot.summary = String(args?.summary ?? '')
+    if (args?.status !== 'failed' && requiredFailures.length) snapshot.summary = `声明执行契约的节点失败：${requiredFailures.map((record) => record.nodeId).join(', ')}；${snapshot.summary}`
     snapshot.endedAt = this.isoNow()
     snapshot.termination = { source: "parent_finish", stopReason: isFailed ? "failed" : "completed", ...(isFailed ? { failure: failureOf({ message: snapshot.summary }, "run_finish", "WF_PARENT_FINISH_FAILED", this.now()) } : {}) }
     this.log().info(JSON.stringify({ runId: snapshot.id, phase: "run_finish", status: snapshot.status, source: "parent_finish", errorCode: snapshot.termination.failure?.code }))

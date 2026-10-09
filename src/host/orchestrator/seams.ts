@@ -85,6 +85,7 @@ export interface GroupMemberPlan {
 
 /** 协作组启动入参。 */
 export interface GroupStartInput {
+  runId?: string
   sessionId: string
   flowId: string
   /**
@@ -124,6 +125,8 @@ export interface GroupStartResult {
 
 /** 节点任务启动入参（任务块与节点级参数，经子代理引擎透传官方配置）。 */
 export interface NodeStartInput {
+  runId?: string
+  attempt?: number
   sessionId: string
   flowId: string
   /**

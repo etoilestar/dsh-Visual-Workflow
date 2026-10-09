@@ -144,6 +144,7 @@ export function setNodeStatus(snapshot: RunSnapshot, nodeId: string, status: Nod
     entry.outputSummary = ""
     delete entry.failure
     delete entry.stopReason
+    delete entry.artifacts
     delete entry.childId
     if (options.attempts !== undefined) {
       entry.attemptHistory ??= []

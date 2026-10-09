@@ -232,6 +232,7 @@ export class RuntimeLaunch extends RuntimeBase {
 
     const runId = this.deps.newRunId?.() ?? `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     const snapshot = buildResumedSnapshot({ prev, runId, flow, sessionId, mode: prev.mode, now: this.now() })
+    this.log().info(JSON.stringify({ runId, phase: 'resume', status: 'requested', resumedFromRunId: prev.id, checkpointNodeId: snapshot.checkpointNodeId, resumeNodeIds: snapshot.resumeNodeIds }))
     snapshot.workingDirectory = await this.deps.workingDirectory?.(sessionId) ?? prev.workingDirectory
     snapshot.fileBindings = prev.fileBindings ? structuredClone(prev.fileBindings) : undefined
     snapshot.parentRoute = prev.parentRoute ? { ...prev.parentRoute } : undefined

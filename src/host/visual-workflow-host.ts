@@ -353,6 +353,7 @@ export class VisualWorkflowHost extends Service {
     const agentId = String(payload?.agent?.id ?? '')
     if (!agentId) return
     this.dropChildScope(agentId)
+    this.orchestrator.discardPendingChildRoute(agentId)
   }
 
   /** 按会话 id 取子代理 agent（wf_ask_agent 投递缝用；转发至 agents 适配）。 */
@@ -493,7 +494,8 @@ export class VisualWorkflowHost extends Service {
     this.ctx.on("agent/request", async (payload, next) => {
       const route = await next()
       const agent = (payload as { agent?: { id?: unknown } } | null)?.agent
-      await this.orchestrator.recordModelRoute(String(agent?.id ?? ""), route)
+      const agentId = String(agent?.id ?? "")
+      await this.orchestrator.recordModelRoute(agentId, route, { pendingChild: this.childPromptStates.has(agentId) })
       return route
     })
     this.ctx.on('agent/created', (payload) => this.onAgentCreated(payload))
