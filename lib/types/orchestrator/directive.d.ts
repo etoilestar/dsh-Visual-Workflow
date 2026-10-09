@@ -25,6 +25,7 @@ export declare function directiveParams(flow: WorkflowDocument, defPath: string,
     resume?: {
         resumeFromNodeId?: string;
         resumedFromRunId: string;
+        resumeNodeIds?: string[];
     };
     /** 模式二用户问题（不稳定内容，仅末段）。 */
     question?: string;
@@ -62,6 +63,7 @@ export declare function buildParentRunPrompt(input: {
     resume?: {
         resumeFromNodeId?: string;
         resumedFromRunId: string;
+        resumeNodeIds?: string[];
     };
     /** 父代理执行单元（具体情况2/3）；纯编排或续跑继承完成时为 null。 */
     executor: {

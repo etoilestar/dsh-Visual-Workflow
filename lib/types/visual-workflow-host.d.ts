@@ -101,7 +101,7 @@ export declare class VisualWorkflowHost extends Service {
      *   - 角色提示词段 + 开关过滤。
      * 因在 `agent/created`（agents.create 发布、首轮组装之前串行 await）执行，
      * 四类贡献在首轮即可见——修复「系统提示词/工具第二轮才更新」的同源时序 BUG。
-     * 单个贡献失败则跳过（其余照装），返回的 disposer 为已成功安装贡献的合并撤销。
+     * 权限贡献失败会阻止创建；可选贡献失败只降级对应能力。
      */
     private installChildScope;
     /** 撤销某 child 已安装的作用域装配（幂等；agent/disposed / 重建路径用）。 */
@@ -117,8 +117,7 @@ export declare class VisualWorkflowHost extends Service {
      *
      * 【0.1.7-rc.1 取证】事件名与 payload 见 `src/host/events.d.ts` 的 `agent/created` 条目；
      * 官方对该事件**按序 await 监听器，且监听器抛错会让创建失败**（dsh-agent/lib/index.js
-     * L579 的 `ctx.serial`），故本处理器全程同步且不抛错（贡献安装由 installChildScope
-     * 逐项 try/catch 隔离）。根 Agent 创建（source='startup'）同样触发本事件：此时
+     * L579 的 `ctx.serial`），故必须返回装配 Promise，权限失败沿官方创建链回滚。根 Agent 创建（source='startup'）同样触发本事件：此时
      * `peekPending()` 为空且 `childPromptStates` 无该 id → 直接返回，无副作用。
      */
     private onAgentCreated;

@@ -10,7 +10,7 @@
 //
 // 白名单规则：
 // - combo：combo.tools ∩ 可见工具集（父代理）+ 所选 MCP 前缀工具；
-// - 官方 preset：agentPresets.acquireScope 取 standing scope 租约 → 工具名 ∩ 可见（服务缺失回退全部可见）；旧 minimal/ptc 硬编码正则被真实 preset 解析取代；
+// - 官方 preset：agentPresets.acquireScope 取 standing scope 租约 → 工具名（无法解析则拒绝启动）；旧 minimal/ptc 硬编码正则被真实 preset 解析取代；
 // - 无强制追加：wf_ask/wf_ask_agent 仅组合勾选时进 allow（旧自动追加删除，PRD §4.4.2 规则 7）；
 // - wf_db_query 仅存在 db-in 连线时追加（§4.4.3 规则 5）；
 // - CHILD_AGENT_HIDDEN_TOOLS（wf_run_node/wf_run_node_wait/wf_finish + 自主编排两工具）永不进 allow，且 tools.restrict 显式 deny（双保险）。
@@ -22,10 +22,10 @@ import type { FlowStore } from '../storage/flow-store.js'
 import type { GraphNode, RoleNode } from '../shared/graph-model.js'
 import type { NodeRunner, NodeStartInput, OrchestratorLogger, GroupStartInput, GroupStartResult } from '../orchestrator/index.js'
 import { consumeReactCappedOf, type ReactGuardBridge } from './guards.js'
-import { CHILD_AGENT_HIDDEN_TOOLS, RESERVED_TRANSPORT_TOOL, TEAM_TOOL_NAMES, WF_FINISH, WF_RUN_NODE, WF_RUN_NODE_WAIT } from '../shared/protocol.js'
+import { CHILD_AGENT_HIDDEN_TOOLS, RESERVED_TRANSPORT_TOOL, TEAM_TOOL_NAMES } from '../shared/protocol.js'
 import type { ModelSelectionLike, ModelSelectionSetup, SelectionChildContext } from './model-selection.js'
 import type { ChildPromptSetup, ChildPromptState } from './prompt-setup.js'
-import type { ChildToolFilterSetup } from './child-tool-filter.js'
+import { ChildToolPermissionError, installChildToolPolicy, type ChildToolFilterSetup } from './child-tool-filter.js'
 import type { AgentTeamsServiceLike } from '../team/index.js'
 import { TeamGroupRunner } from './group-runner.js'
 
@@ -233,14 +233,7 @@ export interface ToolsView {
   visibleToolNames(sessionId?: string): Promise<string[]>
   /** 官方 preset 的 standing scope 工具名；服务缺失返回 null（调用方回退）。 */
   presetToolNames(presetId: string): Promise<string[] | null>
-  /**
-   * 当前会话父代理（root agent）scope 视图工具名（全局层 ∪ 父代理链注册工具）。
-   * 子代理创建时官方 tools.restrict 校验的 restrictableNames 恰为此边界
-   * （官方 view() = 全局层 + 祖先 scope 层注册名；不含注入的 run_code、不含
-   * own scope），因此 allow 名单只能取该集合子集——未注册/幽灵工具
-   * （如 str_replace_editor 仅存在于无关 preset standing scope）由此剔除。
-   * 无 agent/服务缺失回退全局层。
-   */
+  /** 当前会话父代理工具视图，仅供枚举；创建权限必须由实际 child scope 裁决。 */
   agentToolNames(sessionId?: string): Promise<string[]>
 }
 
@@ -430,7 +423,7 @@ const TEAM_BLOCKED_ALLOW_TOOLS: readonly string[] = TEAM_TOOL_NAMES
  * 运行时解析节点工具白名单（架构文档 §4.2 L219）：
  *   - presetId 空 → []（无工具）；
  *   - combo- 前缀 → 组合勾选 ∩ 可见工具集 + 所选 MCP 服务器前缀工具（缺失组合报错）；
- *   - 官方 preset → standing scope 工具名 ∩ 可见（服务缺失回退全部可见）；
+ *   - 官方 preset → standing scope 工具名（无法解析时拒绝启动）；
  *   - db-in 连线存在 → 追加 wf_db_query（§4.4.3 规则 5）；
  *   - CHILD_AGENT_HIDDEN_TOOLS 无条件剔除（即便被组合勾选也不进入子代理）。
  * 注意：无强制追加——wf_ask/wf_ask_agent 仅在组合勾选时进入（PRD §4.4.2 规则 7）。
@@ -456,21 +449,15 @@ export async function resolveAgentTools(input: ResolveToolsInput): Promise<strin
     allow = [...new Set(allow)]
   } else {
     const presetNames = await input.toolsView.presetToolNames(presetId)
-    allow = presetNames ?? visible
+    if (presetNames === null) throw new ChildToolPermissionError(`无法解析工具预设：${presetId}（请确认宿主支持该预设，或选择现有工具组合）`)
+    allow = presetNames
   }
   // CHILD_AGENT_HIDDEN_TOOLS（wf_run_node/wf_run_node_wait/wf_finish + 自主编排两工具）
   // 永不可见（§4.4.2 规则 7 双保险第一层）；
   // 官方保留传输名 run_code 也必须剔除：它由官方自动注入子代理 scope（无需勾选），
   // 且进 allow 名单会让官方 tools.restrict 抛错（core/tools L1085 保留名校验）
   allow = allow.filter((name) => !CHILD_BLOCKED_TOOLS.includes(name) && name !== RESERVED_TRANSPORT_TOOL && !TEAM_BLOCKED_ALLOW_TOOLS.includes(name))
-  // 未注册/幽灵工具兜底（core/tools L1088-1091 unknown 校验）：allow 只能取
-  // 父代理 scope 视图（全局层 ∪ 父链注册）子集——str_replace_editor 这类仅存在于
-  // 无关 preset standing scope 的工具即使被组合勾选也绝不进入 allow，否则子代理
-  // 创建时官方 tools.restrict 抛 "names unknown global tool"。取不到视图时跳过（白名单仍兜底）。
-  const agentNames = await input.toolsView.agentToolNames(input.sessionId)
-  if (agentNames.length > 0) {
-    allow = allow.filter((name) => agentNames.includes(name))
-  }
+  // 权限合法性由创建窗口中的实际 child scope 裁决，父 scope 只用于 UI 枚举。
   // db-in 连线 → wf_db_query 可选注入（§4.4.3 规则 5：有连线才进入工具集）
   if (await hasDbInLine(input)) {
     if (!allow.includes('wf_db_query')) allow.push('wf_db_query')
@@ -710,9 +697,6 @@ export class NodeAgentRunner implements NodeRunner {
 
     const provider = detectSubagentProvider(subagents)
     if (!provider) throw new Error('没有可用的子代理 provider（预期 spawn 或 fork）')
-    // 白名单为空 → 不传 toolFilter（子代理继承父代理工具集边界由宿主组合决定）；
-    // CHILD_AGENT_HIDDEN_TOOLS 永不进入 allow（§4.4.2 规则 7）
-    const toolFilter = tools.length > 0 ? { allow: [...tools] } : undefined
     const agentOptions: { provider?: string; model?: string } = {}
     if (node.data?.provider) agentOptions.provider = node.data.provider
     if (node.data?.model) agentOptions.model = node.data.model
@@ -727,7 +711,7 @@ export class NodeAgentRunner implements NodeRunner {
     // 首轮 followup 组装之前串行 await 触发；此时 withPending 的 AsyncLocalStorage 状态仍在作用域内，
     // 各 contribution 能读到本次创建的 promptState/manifest）。因此 startContinuable 只需要
     // 创建子代理并提交首条任务，不再在返回后重复安装——避免二次「工具已更新」。
-    const started = await this.deps.promptSetup.withPending(promptState, async () => {
+    const started = await this.deps.toolFilter.withPending(tools, () => this.deps.promptSetup.withPending(promptState, async () => {
       const result = await subagents.startContinuable({
         provider,
         label: node.data.label || `visual-workflow:${input.flowId}:${node.id}`,
@@ -736,13 +720,13 @@ export class NodeAgentRunner implements NodeRunner {
           // prompt-setup 注册为系统提示词独立段，不再经官方 request.persona 占用官方人设
           prompt: input.blocks.length > 0 ? input.blocks : [{ type: 'text', text: fallbackPrompt(node) }],
           parent,
-          ...(toolFilter ? { toolFilter } : {}),
           ...(Object.keys(agentOptions).length > 0 ? { agentOptions } : {}),
         },
         signal: input.signal,
       })
       return result
-    })
+    }))
+    this.deps.toolFilter.remember(started.childId, tools)
     const previous = this.nodeChildren.get(key)
     const replacedChildId = previous && previous.childId !== started.childId ? previous.childId : undefined
     if (replacedChildId) {
@@ -855,21 +839,5 @@ export class NodeAgentRunner implements NodeRunner {
  * 三常驻工具的 deny），两者都失败即跳过——白名单 allow 仍兜底。
  */
 export function childVisibilityContribution(): (childCtx: unknown) => () => void {
-  return (rawChildCtx) => {
-    try {
-      const childCtx = rawChildCtx as { get?: (name: string) => unknown }
-      if (typeof childCtx.get !== 'function') return () => {}
-      const tools = childCtx.get('tools') as ToolsServiceLike | null | undefined
-      if (tools && typeof tools.restrict === 'function') {
-        try {
-          return tools.restrict({ deny: [...CHILD_AGENT_HIDDEN_TOOLS] })
-        } catch {
-          return tools.restrict({ deny: [WF_RUN_NODE, WF_RUN_NODE_WAIT, WF_FINISH] })
-        }
-      }
-    } catch {
-      // 工具尚未注册或服务缺失：白名单 allow 已排除，双保险尽力而为
-    }
-    return () => {}
-  }
+  return (childCtx) => installChildToolPolicy(childCtx, undefined)
 }

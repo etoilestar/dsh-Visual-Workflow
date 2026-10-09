@@ -94,6 +94,7 @@ export async function reconcileStaleRuns(store: FlowStore, options: { now?: () =
       ...run,
       status: 'interrupted',
       endedAt,
+      termination: { source: "host_restart", stopReason: "interrupted" },
       summary: '宿主进程重启，运行已中断（可恢复）',
       nodes: run.nodes.map((node) =>
         node.status === 'running'

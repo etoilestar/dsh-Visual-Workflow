@@ -31,6 +31,14 @@ export interface RunSnapshot {
     resumedFromRunId?: string;
     /** 断点续跑：从哪个节点恢复（暂停节点 id，需求文档 §4.7 规则 3）。 */
     resumeFromNodeId?: string;
+    checkpointNodeId?: string;
+    resumeNodeIds?: string[];
+    termination?: RunTermination;
+    parentErrors?: RunFailure[];
+    parentRoute?: {
+        provider?: string;
+        model?: string;
+    };
     /**
      * 元参数冻结副本（D-13）：startRun 时把「有效元参数（模板 ← 实例覆盖）」的副本
      * 写入快照，供审计与后续评估/重组还原当时预算；续跑继承旧快照的冻结值（不重读）。
@@ -64,6 +72,11 @@ export interface RunSnapshot {
         resumed?: boolean;
         /** 最近一次回合的终止原因（stop/interrupt/fail/react-capped/completed；用于父代理区分用户停止与异常失败，P2-5）。 */
         stopReason?: string;
+        childId?: string;
+        provider?: string;
+        model?: string;
+        failure?: RunFailure;
+        attemptHistory?: NodeAttempt[];
         /** 回合明细（可续跑节点每次被唤醒执行为一回合；P0-2）。 */
         turns?: Array<{
             /** 回合开始时间。 */
@@ -99,4 +112,28 @@ export interface NodeOutputRecord {
     outputSummary: string;
     /** 是否继承自旧 run。 */
     resumed?: boolean;
+}
+export interface RunFailure {
+    phase: "tool_policy" | "node_input" | "child_start" | "child_execute" | "parent_execute" | "run_finish";
+    code: string;
+    message: string;
+    retryable: boolean;
+    occurredAt: string;
+}
+export interface NodeAttempt {
+    attempt: number;
+    phase: "child_start" | "child_execute" | "settled";
+    startedAt: string;
+    endedAt?: string;
+    childId?: string;
+    provider?: string;
+    model?: string;
+    status: NodeRunStatus;
+    stopReason?: string;
+    failure?: RunFailure;
+}
+export interface RunTermination {
+    source: "parent_error" | "parent_finish" | "user_stop" | "idle_timeout" | "host_restart" | "runtime";
+    stopReason: string;
+    failure?: RunFailure;
 }

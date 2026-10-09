@@ -1,77 +1,88 @@
-// tests/host/agent/child-tool-filter.test.ts
-//
-// 子代理工具白名单装配单测：
-//   - 创建窗口夹持（withPending）：作用域内安装的 restrict 采用本次白名单；
-//     空/缺省白名单不安装 restrict（与官方创建请求的「空 toolFilter」同语义）；
-//   - 按 childId 留存与重发布重装（remember/restore）：冷恢复后白名单仍生效；
-//   - 官方校验失败（名单含未注册工具）按尽力而为处理：不抛错、不阻断创建。
+import { describe, expect, it } from "vitest"
+import { createChildToolFilterSetup, installChildToolPolicy } from "../../../src/host/agent/child-tool-filter.js"
 
-import { describe, expect, it, vi } from 'vitest'
-import { createChildToolFilterSetup } from '../../../src/host/agent/child-tool-filter.js'
-
-/** 最小 childCtx fake：经 get('tools') 取工具服务。 */
-function ctxWithTools(restrict: (filter: { allow?: string[]; deny?: string[] }) => () => void): { get(name: string): unknown } {
-  return { get: (name: string) => (name === 'tools' ? { restrict } : undefined) }
+function scope(inherited = ["read", "write", "mcp__server__read"], own = ["send_message", "custom"]) {
+  const guards: Array<(execution: { call: { name: string } }) => string | undefined> = []
+  const masks: Array<{ allow?: string[]; deny?: string[] }> = []
+  const tools = {
+    get: (name: string) => inherited.includes(name) || own.includes(name) ? {} : undefined,
+    guard: (check: (execution: { call: { name: string } }) => string | undefined) => {
+      guards.push(check)
+      return () => { guards.splice(guards.indexOf(check), 1) }
+    },
+    restrict: (filter: { allow?: string[]; deny?: string[] }) => {
+      const unknown = [...filter.allow ?? [], ...filter.deny ?? []].find((name) => !inherited.includes(name))
+      if (unknown) throw new Error(`tools.restrict() names unknown global tool "${unknown}"`)
+      masks.push(filter)
+      return () => { masks.splice(masks.indexOf(filter), 1) }
+    },
+  }
+  return { tools, context: { get: () => tools }, masks, denied: (name: string) => guards.some((check) => check({ call: { name } }) !== undefined) }
 }
 
-describe('createChildToolFilterSetup', () => {
-  it('withPending：创建窗口内安装 allow 名单，并返回该次安装的撤销函数', async () => {
+describe("child scope permissions", () => {
+  it("test_standard_scope_root_only_subagent_is_not_restricted", () => {
+    const child = scope()
+    installChildToolPolicy(child.context, ["read", "subagent", "mcp__server__read", "custom"])
+    expect(child.masks).toEqual([{ allow: ["read", "mcp__server__read"] }])
+    expect(child.denied("read")).toBe(false)
+    expect(child.denied("custom")).toBe(false)
+    expect(child.denied("mcp__server__read")).toBe(false)
+    expect(child.denied("write")).toBe(true)
+    expect(child.denied("wf_finish")).toBe(true)
+    expect(child.denied("wf_graph_patch")).toBe(true)
+  })
+
+  it("test_empty_allow_denies_inherited_and_unapproved_own_tools", async () => {
     const setup = createChildToolFilterSetup()
-    const undo = vi.fn()
-    const restrict = vi.fn(() => undo)
-    const ctx = ctxWithTools(restrict as unknown as (filter: { allow?: string[]; deny?: string[] }) => () => void)
+    const child = scope()
+    await setup.withPending([], async () => setup.contribution(child.context))
+    expect(child.masks).toEqual([{ allow: [] }])
+    expect(child.denied("read")).toBe(true)
+    expect(child.denied("custom")).toBe(true)
+    expect(child.denied("run_code")).toBe(false)
+    expect(child.denied("send_message")).toBe(false)
+  })
 
-    const dispose = await setup.withPending(['read', 'write'], async () => setup.contribution(ctx))
+  it("test_unconfigured_allow_preserves_inheritance_but_denies_parent_tools", () => {
+    const child = scope()
+    installChildToolPolicy(child.context, undefined)
+    expect(child.masks).toEqual([])
+    expect(child.denied("read")).toBe(false)
+    expect(child.denied("wf_finish")).toBe(true)
+  })
 
-    expect(restrict).toHaveBeenCalledWith({ allow: ['read', 'write'] })
+  it("test_install_failure_does_not_widen_permissions", () => {
+    const child = scope()
+    const restrict = child.tools.restrict
+    child.tools.restrict = (filter) => {
+      if (filter.allow !== undefined) throw new Error("policy installation failed")
+      return restrict(filter)
+    }
+    expect(() => installChildToolPolicy(child.context, ["read"])).toThrow("白名单安装失败")
+    expect(child.denied("write")).toBe(true)
+    expect(child.denied("wf_finish")).toBe(true)
+  })
+
+  it("test_missing_tool_or_guard_fails_before_inference", () => {
+    const child = scope()
+    expect(() => installChildToolPolicy(child.context, ["ghost"])).toThrow("实际子代理作用域不可用")
+    expect(() => installChildToolPolicy({ get: () => ({ restrict: () => () => {} }) }, [])).toThrow("无法安全启动")
+    expect(child.denied("write")).toBe(true)
+  })
+
+  it("test_empty_policy_survives_cold_restore_and_disposal", () => {
+    const setup = createChildToolFilterSetup()
+    setup.remember("child", [])
+    const child = scope()
+    const dispose = setup.restore("child", child.context)
+    expect(child.masks).toEqual([{ allow: [] }])
+    expect(child.denied("read")).toBe(true)
     dispose()
-    expect(undo).toHaveBeenCalledTimes(1)
-  })
-
-  it('无创建窗口 / 空白名单：不调用 restrict（不限制继承面）', () => {
-    const setup = createChildToolFilterSetup()
-    const restrict = vi.fn()
-    const ctx = ctxWithTools(restrict as unknown as (filter: { allow?: string[]; deny?: string[] }) => () => void)
-
-    setup.contribution(ctx)
-    expect(restrict).not.toHaveBeenCalled()
-
-    expect(setup.restore('child-1', ctx)).toBeTypeOf('function')
-    expect(restrict).not.toHaveBeenCalled()
-  })
-
-  it('restrict 抛错（名单含未注册工具）：不向上抛，退回继承面', async () => {
-    const setup = createChildToolFilterSetup()
-    const restrict = vi.fn(() => { throw new Error('tools.restrict() names unknown global tool "ghost"') })
-    const ctx = ctxWithTools(restrict as unknown as (filter: { allow?: string[]; deny?: string[] }) => () => void)
-
-    const dispose = await setup.withPending(['ghost'], async () => setup.contribution(ctx))
-    expect(restrict).toHaveBeenCalledTimes(1)
-    expect(() => dispose()).not.toThrow()
-  })
-
-  it('remember + restore：重发布（冷恢复）后按留存名单重装，并返回撤销函数', () => {
-    const setup = createChildToolFilterSetup()
-    const undo = vi.fn()
-    const restrict = vi.fn(() => undo)
-    const ctx = ctxWithTools(restrict as unknown as (filter: { allow?: string[]; deny?: string[] }) => () => void)
-
-    setup.remember('child-1', ['read'])
-    const dispose = setup.restore('child-1', ctx)
-
-    expect(restrict).toHaveBeenCalledWith({ allow: ['read'] })
-    dispose()
-    expect(undo).toHaveBeenCalledTimes(1)
-  })
-
-  it('remember 空名单：清除留存，restore 不再安装', () => {
-    const setup = createChildToolFilterSetup()
-    const restrict = vi.fn()
-    const ctx = ctxWithTools(restrict as unknown as (filter: { allow?: string[]; deny?: string[] }) => () => void)
-
-    setup.remember('child-1', ['read'])
-    setup.remember('child-1', [])
-    setup.restore('child-1', ctx)
-    expect(restrict).not.toHaveBeenCalled()
+    expect(child.masks).toEqual([])
+    expect(child.denied("read")).toBe(false)
+    setup.remember("child", undefined)
+    setup.restore("child", child.context)
+    expect(child.masks).toEqual([])
   })
 })

@@ -17,7 +17,7 @@
 //   - scheduler-types.js 定时任务实体与运行态
 //   - org-meta.js       元参数本体（OrgMeta / OrgBudget）
 
-export type { NodeOutputRecord, NodeRunStatus, RunSnapshot, RunStatus } from './run-types.js'
+export type { NodeOutputRecord, NodeRunStatus, RunSnapshot, RunStatus, RunFailure, NodeAttempt, RunTermination } from './run-types.js'
 export type { ServiceState, ServiceStatus, UserIdMap } from './service-types.js'
 export type {
   BundleV2,

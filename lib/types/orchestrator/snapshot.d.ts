@@ -1,5 +1,5 @@
 import type { WorkflowDocument } from '../shared/graph-model.js';
-import type { NodeRunStatus, RunSnapshot, RunStatus } from '../shared/types.js';
+import type { NodeRunStatus, RunSnapshot, RunStatus, RunFailure } from '../shared/types.js';
 /** 输出摘要截断上限（字符，架构文档 §6.1 nodes[].outputSummary；需求 §4.7 规则 7）。 */
 export declare const OUTPUT_SUMMARY_LIMIT = 6000;
 /** run 状态中文文案（错误提示/历史面板共用）。 */
@@ -26,6 +26,10 @@ export declare function createRunSnapshot(input: {
 export interface SetNodeStatusOptions {
     /** 覆盖尝试计数（wf_run_node 每次调用递增）。 */
     attempts?: number;
+    failure?: RunFailure;
+    childId?: string;
+    provider?: string;
+    model?: string;
     /** 节点完整输出（status='ok'|'react-capped' 时写入：完整输出截断到 outputFullLimit、摘要截断到 6000 字）。 */
     output?: string;
     /** 完整输出持久化字节上限（缺省 100KB）。 */
@@ -74,3 +78,5 @@ export declare function cloneSnapshot(snapshot: RunSnapshot): RunSnapshot;
  * 两套口径分别截断——若在提取阶段就按摘要口径截断，outputFullLimit 会失效。
  */
 export declare function lastAssistantText(blocks: unknown, limit: number): string;
+/** 持久诊断保留错误语义，清除常见凭据和 URL 查询参数。 */
+export declare function failureOf(error: unknown, phase: RunFailure["phase"], code: string, now: number): RunFailure;

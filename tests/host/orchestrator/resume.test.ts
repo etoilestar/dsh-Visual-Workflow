@@ -230,8 +230,8 @@ describe('runtime.resumeRun', () => {
     expect(injected.length).toBe(2)
     const directive = injected[1].content.map((b) => b.text).join('')
     expect(directive).toContain('正在恢复先前运行（resumedFromRunId：run-1）')
-    expect(directive).toContain('已 ok 的节点不得重跑')
-    expect(directive).toContain('从节点 n-pause 开始')
+    expect(directive).toContain('ok/react-capped')
+    expect(directive).toContain('[n-a2]')
 
     // 续跑后 wf_run_node 可正常调度（新 run 上下文）
     const started = await h.runtime.wfRunNode(rootCaller, { nodeId: 'n-a2' })
@@ -253,11 +253,11 @@ describe('runtime.resumeRun', () => {
     expect(snapshot?.nodes.find((n) => n.nodeId === 'n-a1')).toMatchObject({ status: 'ok', resumed: true })
     // 推断起点 = 引擎快照中首个未完成节点（start 节点不派生子代理、快照保持 pending，
     // a1 已 ok 继承 → 故为 n-start）；断点继续指令必须用该推断值，而非 undefined「（未指定）」。
-    expect(snapshot?.resumeFromNodeId).toBe('n-start')
+    expect(snapshot?.resumeFromNodeId).toBe('n-a2')
     // BugF 回归：注入的断点继续指令必须与快照推断起点一致，且不出现「（未指定）」占位。
     const injected = h.agents.roots.get('session-1')!.messages
     const directive = injected.map((m) => m.content.map((b) => b.text).join('')).join('\n')
-    expect(directive).toContain('从节点 n-start 开始')
+    expect(directive).toContain('[n-a2]')
     expect(directive).not.toContain('（未指定）')
   })
 

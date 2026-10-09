@@ -6,7 +6,7 @@
 
 import type { WorkflowDocument } from '../shared/graph-model.js'
 import { memberGroupId } from '../graph/index.js'
-import { lastAssistantText, setNodeStatus } from './snapshot.js'
+import { failureOf, lastAssistantText, setNodeStatus } from './snapshot.js'
 import { SUBAGENT_END_RETRY_DELAY_MS, SUBAGENT_END_RETRY_MAX } from './seams.js'
 import type { RunEntry, SubagentEndInfo } from './run-entry.js'
 import { RuntimeComm } from './runtime-comm.js'
@@ -79,11 +79,14 @@ export class RuntimeObserve extends RuntimeComm {
         now: this.now(),
         stopReason,
         recordTurn: true,
+        childId,
+        ...(completed ? {} : { failure: s.nodes.find((node) => node.nodeId === meta.nodeId)?.failure ?? failureOf({ message: `子代理执行结束：${stopReason || "unknown"}` }, "child_execute", "WF_CHILD_EXECUTION_FAILED", this.now()) }),
       })
       // 协作组聚合：成员产出一轮后若组内全部成员均已产出且该组无挂起 ask → 组卡片记为 ok
       // （「组内全部 ok -> 组卡片记为 ok」；只做回显，不干预父代理调度）
       if (completed) await this.markGroupOkIfComplete(entry, meta.nodeId)
       await this.persistWarn(entry)
+      this.log().info(JSON.stringify({ runId: s.id, nodeId: meta.nodeId, childId, attempt: s.nodes.find((node) => node.nodeId === meta.nodeId)?.attempts, phase: "settled", status: finalStatus, stopReason, errorCode: completed ? undefined : "WF_CHILD_EXECUTION_FAILED" }))
       // 唤醒阻塞等待（wait:true；与 subagent/end 共用同一完成通道）。armed 视同完成。
       const waitKey = `${s.id}:${meta.nodeId}`
       const waiter = entry.waiters.get(waitKey)

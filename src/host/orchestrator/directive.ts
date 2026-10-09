@@ -62,7 +62,7 @@ export function directiveParams(
   mode: 'mode1' | 'mode2',
   extra?: {
     /** 断点继续事实（resumeRun 用）。 */
-    resume?: { resumeFromNodeId?: string; resumedFromRunId: string }
+    resume?: { resumeFromNodeId?: string; resumedFromRunId: string; resumeNodeIds?: string[] }
     /** 模式二用户问题（不稳定内容，仅末段）。 */
     question?: string
     /** 情况2（hybrid）：父代理执行单元身份（父代理被流程线连接；静态）。 */
@@ -98,7 +98,7 @@ export function directiveParams(
       ...(extra?.orgBudgetText ? { orgBudgetText: extra.orgBudgetText } : {}),
       ...(extra?.parentTaskBlock ? { parentTaskBlock: extra.parentTaskBlock } : {}),
       ...(extra?.resume
-        ? { isResume: true, resumeFromNodeId: extra.resume.resumeFromNodeId, resumedFromRunId: extra.resume.resumedFromRunId }
+        ? { isResume: true, resumeFromNodeId: extra.resume.resumeFromNodeId, resumeNodeIds: extra.resume.resumeNodeIds, resumedFromRunId: extra.resume.resumedFromRunId }
         : {}),
     },
   }
@@ -121,7 +121,7 @@ export function buildParentRunPrompt(input: {
   /** 模式二用户问题（不稳定内容，仅末段）。 */
   question?: string
   /** 断点继续事实（resumeRun 用）。 */
-  resume?: { resumeFromNodeId?: string; resumedFromRunId: string }
+  resume?: { resumeFromNodeId?: string; resumedFromRunId: string; resumeNodeIds?: string[] }
   /** 父代理执行单元（具体情况2/3）；纯编排或续跑继承完成时为 null。 */
   executor: { nodeId: string; nodeLabel: string; task: ExecutorContextFacts; runContextText: string } | null
   /** 系统语言名（从 DSH 用户设置读取；注入语言规则）。 */

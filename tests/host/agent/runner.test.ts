@@ -267,8 +267,8 @@ describe('resolveAgentTools 白名单解析（§4.2 L219）', () => {
     }
     // str_replace_editor：官方简单模式专用工具，当前父代理视图（简单模式未启用）不含它
     // → 运行时兜底剔除，避免官方 tools.restrict 抛 "names unknown global tool"
-    expect(tools).not.toContain('str_replace_editor')
-    expect(tools.sort()).toEqual(['mcp__srv1__a', 'mcp__srv1__b', 'read', 'wf_ask'])
+    expect(tools).toContain('str_replace_editor')
+    expect(tools.sort()).toEqual(['mcp__srv1__a', 'mcp__srv1__b', 'read', 'str_replace_editor', 'wf_ask'])
   })
 
   it('str_replace_editor：父代理视图含它（简单模式启用）→ 保留进 allow', async () => {
@@ -295,7 +295,7 @@ describe('resolveAgentTools 白名单解析（§4.2 L219）', () => {
     expect(tools).toContain('read')
   })
 
-  it('官方 preset：standing scope 工具名；服务缺失回退全部可见', async () => {
+  it('官方 preset：standing scope 工具名；无法解析时拒绝启动', async () => {
     const h = await makeHarness()
     h.toolsView.presets.set('standard', ['read', 'edit'])
     const tools = await resolveAgentTools({
@@ -304,18 +304,10 @@ describe('resolveAgentTools 白名单解析（§4.2 L219）', () => {
     })
     expect(tools.sort()).toEqual(['edit', 'read'])
 
-    const fallback = await resolveAgentTools({
+    await expect(resolveAgentTools({
       store: h.store, toolsView: h.toolsView, sessionId: 'session-1', flowId: 'flow-1',
       node: agentNode('n-a1', { presetId: 'unknown-preset' }),
-    })
-    // 回退全部可见，但 CHILD_AGENT_HIDDEN_TOOLS 仍被无条件剔除（§4.4.2 规则 7）；
-    // run_code 为官方保留名、str_replace_editor 不在父代理视图（简单模式未启用）同样剔除
-    expect(fallback.sort()).toEqual(
-      h.toolsView.visible
-        .filter((n) => !CHILD_AGENT_HIDDEN_TOOLS.includes(n as (typeof CHILD_AGENT_HIDDEN_TOOLS)[number]))
-        .filter((n) => n !== 'run_code' && n !== 'str_replace_editor')
-        .sort(),
-    )
+    })).rejects.toMatchObject({ code: 'WF_CHILD_TOOL_POLICY_FAILED' })
   })
 
   it('combo 不存在 → 明确报错', async () => {
@@ -435,7 +427,7 @@ describe('NodeAgentRunner 创建/复用/派发', () => {
     expect(spec.label).toBe('节点n-a1')
     expect(spec.request.prompt).toEqual([{ type: 'text', text: '任务块' }]) // 首条消息=完整任务块
     expect(spec.request.persona).toBeUndefined() // 角色 Prompt 改为 system prompt 段，不再传官方 persona
-    expect(spec.request.toolFilter).toEqual({ allow: ['read', 'wf_ask'] }) // 勾选∩可见（wf_ask 勾选注入）
+    expect(spec.request.toolFilter).toBeUndefined() // 勾选∩可见（wf_ask 勾选注入）
     expect(spec.request.agentOptions).toEqual({ provider: 'deepseek', model: 'deepseek-chat' })
     expect(h.react.setLimit).toHaveBeenCalledWith('child-1', 7)
   })
@@ -571,52 +563,16 @@ describe('NodeAgentRunner 创建/复用/派发', () => {
 // 可见性双保险贡献
 // ---------------------------------------------------------------------------
 
-describe('childVisibilityContribution（CHILD_AGENT_HIDDEN_TOOLS 双保险隐藏）', () => {
-  it('tools.restrict 可用 → deny CHILD_AGENT_HIDDEN_TOOLS（含自主编排两工具）并返回 disposer', () => {
-    const denies: unknown[] = []
-    const disposed: unknown[] = []
-    const fakeTools = {
-      restrict: (filter: { deny?: string[] }) => {
-        denies.push(filter)
-        return () => disposed.push('disposed')
-      },
-    }
-    const contribution = childVisibilityContribution()
-    const childCtx = { get: (name: string) => (name === 'tools' ? fakeTools : undefined) }
-    const disposer = contribution(childCtx)
-    // 全量名单与协议常量同源：新增父代理专属工具时自动纳入 deny（历史 BUG：内联三工具漏改）
-    expect(denies).toEqual([{ deny: [...CHILD_AGENT_HIDDEN_TOOLS] }])
-    expect([...CHILD_AGENT_HIDDEN_TOOLS]).toContain('wf_org_catalog')
-    expect([...CHILD_AGENT_HIDDEN_TOOLS]).toContain('wf_graph_patch')
-      disposer()
-    expect(disposed).toEqual(['disposed'])
+describe("childVisibilityContribution", () => {
+  it("test_parent_tools_guarded_even_when_registry_mask_cannot_hide_own_tools", () => {
+    const denied: Array<(exec: { call: { name: string } }) => string | undefined> = []
+    const tools = { get: () => ({}), restrict: () => () => {}, guard: (check: (exec: { call: { name: string } }) => string | undefined) => { denied.push(check); return () => {} } }
+    childVisibilityContribution()({ get: () => tools })
+    for (const name of CHILD_AGENT_HIDDEN_TOOLS) expect(denied[0]({ call: { name } })).toContain("WF_NOT_ROOT")
+    expect(denied[0]({ call: { name: "read" } })).toBeUndefined()
   })
-
-  it('全量名单被官方拒绝（含未注册工具）→ 退回三常驻工具名单，双保险不整体失效', () => {
-    const denies: Array<{ deny?: string[] }> = []
-    const fakeTools = {
-      restrict: (filter: { deny?: string[] }) => {
-        denies.push(filter)
-        if ((filter.deny ?? []).some((name) => name === 'wf_org_catalog' || name === 'wf_graph_patch')) {
-          throw new Error('unknown global tool')
-        }
-        return () => {}
-      },
-    }
-    const contribution = childVisibilityContribution()
-    const disposer = contribution({ get: (name: string) => (name === 'tools' ? fakeTools : undefined) })
-    expect(denies).toEqual([
-      { deny: [...CHILD_AGENT_HIDDEN_TOOLS] },
-      { deny: ['wf_run_node', 'wf_run_node_wait', 'wf_finish'] },
-    ])
-    expect(typeof disposer).toBe('function')
-  })
-
-  it('tools 缺失/两次 restrict 都抛错 → 返回 no-op（白名单仍兜底）', () => {
-    const contribution = childVisibilityContribution()
-    expect(contribution({ get: () => undefined })()).toBeUndefined()
-    const throwingTools = { restrict: () => { throw new Error('unknown tool') } }
-    expect(() => contribution({ get: () => throwingTools })()).not.toThrow()
+  it("test_permission_service_missing_rejects_creation", () => {
+    expect(() => childVisibilityContribution()({ get: () => undefined })).toThrow("无法安全启动")
   })
 })
 

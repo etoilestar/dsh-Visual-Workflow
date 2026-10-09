@@ -45,3 +45,5 @@ export declare function buildResumedSnapshot(input: {
     mode: 'mode1' | 'mode2';
     now?: number;
 }): RunSnapshot;
+/** 根据流程依赖找恢复调度前沿；结构节点不作为业务 Agent，暂停门仍需显式调度。 */
+export declare function schedulableResumeNodeIds(flow: WorkflowDocument, snapshot: RunSnapshot): string[];

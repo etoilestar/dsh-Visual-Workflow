@@ -132,6 +132,7 @@ export class TeamGroupRunner {
 
     for (const plan of input.members) {
       const node = plan.node
+      await input.onMemberStarting?.(node.id)
       const name = teammateNameOf(node.id)
       if (!isTeammateNameValid(name)) {
         throw new Error(`协作组成员名不合法：${name}（来自节点 ${node.id}）`)
@@ -164,10 +165,14 @@ export class TeamGroupRunner {
           throw new Error(`协作组成员「${name}」仍在创建中，请稍后重试`)
         }
         const childId = String(existing.id ?? '')
-        await teams.sendMessage(root, { target: name, content: plan.blocks, signal: input.signal })
-        this.applyMemberComposition(childId, selection, tools, plan.iterationLimit)
+        const previousSignature = this.memberSignatures.get(name)
         this.reportSignatureChange(name, signature)
-        members.push({ nodeId: node.id, target: name, childId, reused: true })
+        // 成员组成不可重建；发生变化时保持最初的权限，不把新白名单留存到冷恢复路径。
+        await teams.sendMessage(root, { target: name, content: plan.blocks, signal: input.signal })
+        if (previousSignature === undefined || previousSignature === signature) this.applyMemberComposition(childId, selection, tools, plan.iterationLimit)
+        const member = { nodeId: node.id, target: name, childId, reused: true }
+        members.push(member)
+        await input.onMemberStarted?.(member)
         continue
       }
 
@@ -189,7 +194,9 @@ export class TeamGroupRunner {
       this.applyMemberComposition(childId, selection, tools, plan.iterationLimit)
       this.rememberSignature(name, signature)
       roster.set(name, spawned?.member ?? { id: childId, name, role: 'teammate', status: 'inactive' })
-      members.push({ nodeId: node.id, target: name, childId, reused: false })
+      const member = { nodeId: node.id, target: name, childId, reused: false }
+      members.push(member)
+      await input.onMemberStarted?.(member)
     }
 
     return { members }
@@ -236,7 +243,6 @@ export class TeamGroupRunner {
       return
     }
     if (previous === signature) return
-    this.memberSignatures.set(name, signature)
     this.deps.logger?.warn(
       `[visual-workflow] 协作组成员「${name}」的组成（角色提示词/模型/工具/协作 Prompt）已变化，` +
       '但官方成员在会话内不可重建；本次仍沿用既有组成，新建会话后生效。',

@@ -17,8 +17,9 @@
 // 是「从未执行」，被终止时正在执行的节点已消耗一次尝试且产出不可信，必须重跑；
 // 只有从未启动的 pending 才记 skipped。
 
+import { messageOf } from './errors.js'
 import type { WorkflowDocument } from '../shared/graph-model.js'
-import type { NodeRunStatus, RunSnapshot, RunStatus } from '../shared/types.js'
+import type { NodeRunStatus, RunSnapshot, RunStatus, RunFailure } from '../shared/types.js'
 
 /** 输出摘要截断上限（字符，架构文档 §6.1 nodes[].outputSummary；需求 §4.7 规则 7）。 */
 export const OUTPUT_SUMMARY_LIMIT = 6000
@@ -92,6 +93,10 @@ export function createRunSnapshot(input: {
 export interface SetNodeStatusOptions {
   /** 覆盖尝试计数（wf_run_node 每次调用递增）。 */
   attempts?: number
+  failure?: RunFailure
+  childId?: string
+  provider?: string
+  model?: string
   /** 节点完整输出（status='ok'|'react-capped' 时写入：完整输出截断到 outputFullLimit、摘要截断到 6000 字）。 */
   output?: string
   /** 完整输出持久化字节上限（缺省 100KB）。 */
@@ -127,12 +132,38 @@ export function setNodeStatus(snapshot: RunSnapshot, nodeId: string, status: Nod
   const prevStatus = entry.status
   entry.status = status
   if (options.attempts !== undefined) entry.attempts = options.attempts
-  if (status === 'ok' || status === 'react-capped') {
+  if (status === 'ok' || status === 'react-capped' || status === 'armed' || (status === 'fail' && options.output !== undefined)) {
     const text = String(options.output ?? '')
     entry.output = truncateText(text, options.outputFullLimit ?? DEFAULT_OUTPUT_FULL_LIMIT)
     entry.outputSummary = truncateText(text, OUTPUT_SUMMARY_LIMIT)
   }
-  if (status === 'running' && !entry.startedAt) entry.startedAt = new Date(now).toISOString()
+  if (status === "running" && (prevStatus !== "running" || options.attempts !== undefined)) {
+    entry.startedAt = new Date(now).toISOString()
+    entry.endedAt = null
+    entry.output = ""
+    entry.outputSummary = ""
+    delete entry.failure
+    delete entry.stopReason
+    delete entry.childId
+    if (options.attempts !== undefined) {
+      entry.attemptHistory ??= []
+      entry.attemptHistory.push({ attempt: options.attempts, phase: "child_start", status, startedAt: entry.startedAt })
+    }
+  }
+  if (options.failure !== undefined) entry.failure = structuredClone(options.failure)
+  if (options.childId !== undefined) entry.childId = options.childId
+  if (options.provider !== undefined) entry.provider = options.provider
+  if (options.model !== undefined) entry.model = options.model
+  const attempt = entry.attemptHistory?.[entry.attemptHistory.length - 1]
+  if (attempt) {
+    attempt.status = status
+    if (options.childId !== undefined) { attempt.childId = options.childId; attempt.phase = "child_execute" }
+    if (options.provider !== undefined) attempt.provider = options.provider
+    if (options.model !== undefined) attempt.model = options.model
+    if (options.failure !== undefined) attempt.failure = structuredClone(options.failure)
+    if (options.stopReason !== undefined) attempt.stopReason = options.stopReason
+    if (["ok", "armed", "fail", "react-capped"].includes(status)) { attempt.endedAt = new Date(now).toISOString(); attempt.phase = "settled" }
+  }
   const terminalOrArmed = status === 'ok' || status === 'fail' || status === 'skipped' || status === 'react-capped' || status === 'armed'
   if (terminalOrArmed) {
     // P0-2：endedAt 随回合刷新（最近完成时间），不再冻结在首次完成。
@@ -165,6 +196,8 @@ export function terminalizeNodes(snapshot: RunSnapshot, now?: number, stopReason
     else if (node.status === 'running') {
       node.status = 'fail'
       if (!node.endedAt) node.endedAt = endedAt
+      const attempt = node.attemptHistory?.at(-1)
+      if (attempt) { attempt.status = 'fail'; attempt.phase = 'settled'; attempt.endedAt = endedAt; attempt.stopReason = stopReason }
       if (stopReason) {
         node.stopReason = stopReason
         node.turns ??= []
@@ -172,6 +205,8 @@ export function terminalizeNodes(snapshot: RunSnapshot, now?: number, stopReason
       }
     } else if (node.status === 'armed') {
       node.status = 'ok'
+      const attempt = node.attemptHistory?.at(-1)
+      if (attempt) { attempt.status = 'ok'; attempt.phase = 'settled'; attempt.endedAt ??= endedAt }
       if (!node.endedAt) node.endedAt = endedAt
     }
   }
@@ -201,4 +236,23 @@ export function lastAssistantText(blocks: unknown, limit: number): string {
     .trim()
   if (!text) return ''
   return limit > 0 ? truncateText(text, limit) : text
+}
+
+
+/** 持久诊断保留错误语义，清除常见凭据和 URL 查询参数。 */
+export function failureOf(error: unknown, phase: RunFailure["phase"], code: string, now: number): RunFailure {
+  const value = error as { code?: unknown; message?: unknown; retryable?: unknown; phase?: unknown } | null
+  const message = messageOf(error)
+  const safe = message
+    .replace(/(authorization|api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@")
+    .replace(/(https?:\/\/[^\s?]+)\?[^\s]+/gi, "$1?[redacted]")
+  return {
+    phase: value?.phase === "tool_policy" ? "tool_policy" : phase,
+    code: typeof value?.code === "string" ? value.code : code,
+    message: truncateText(safe, 2000),
+    retryable: value?.retryable === true,
+    occurredAt: new Date(now).toISOString(),
+  }
 }

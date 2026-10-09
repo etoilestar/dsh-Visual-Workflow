@@ -165,4 +165,5 @@ export interface TerminateOptions {
     status: 'stopped' | 'failed';
     summary: string;
     abortReason?: string;
+    termination?: import("../shared/types.js").RunTermination;
 }

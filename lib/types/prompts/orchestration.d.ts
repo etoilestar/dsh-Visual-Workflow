@@ -48,6 +48,7 @@ export interface OrchestrationDirectiveParams {
         isResume?: boolean;
         /** 断点恢复时待继续的起始节点 id（isResume 为 true 时给出）。 */
         resumeFromNodeId?: string;
+        resumeNodeIds?: string[];
         /** 继承链来源 run id（恢复运行上一跳记录；空为首次运行）。 */
         resumedFromRunId?: string;
         /** 暂停节点 id 清单：父代理对其中任一调用 wf_run_node（nodeId=暂停节点 id）即触发暂停门。 */

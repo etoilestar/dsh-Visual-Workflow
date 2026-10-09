@@ -84,6 +84,9 @@ export interface GroupStartInput {
     members: GroupMemberPlan[];
     /** 运行级取消信号（运行停止/终止/插件卸载）。 */
     signal: AbortSignal;
+    /** 按实际派发顺序登记尝试和会话，保留部分创建失败之前已经启动的成员。 */
+    onMemberStarting?: (nodeId: string) => Promise<void>;
+    onMemberStarted?: (member: GroupMemberStarted) => Promise<void>;
 }
 /** 已启动或已复用的协作组成员。 */
 export interface GroupMemberStarted {

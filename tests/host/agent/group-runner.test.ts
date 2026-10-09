@@ -54,7 +54,7 @@ class FakeChildCtx {
       },
     },
     get: (name: string): unknown => (name === 'tools'
-      ? { restrict: (filter: { allow?: string[]; deny?: string[] }): (() => void) => { this.restrictCalls.push(filter); return () => {} } }
+      ? { get: () => ({}), guard: () => () => {}, restrict: (filter: { allow?: string[]; deny?: string[] }): (() => void) => { if (filter.allow !== undefined) this.restrictCalls.push(filter); return () => {} } }
       : undefined),
   }
 
