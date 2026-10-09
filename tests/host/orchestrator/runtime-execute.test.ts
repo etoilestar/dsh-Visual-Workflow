@@ -528,6 +528,19 @@ describe('wfFinish 收尾', () => {
     expect((await h.store.getRun("run-1"))?.nodes.find((node) => node.nodeId === "n-a2")?.status).toBe("skipped")
   })
 
+  it("test_selected_conditional_path_failure_is_not_hidden_without_execution_contract", async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.lines.find((line) => line.id === "l2")!.condition = { type: "pass" }
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a2" })
+    await h.runtime.handleSubagentEnd({ id: "child-2", stopReason: "error" })
+    await h.runtime.wfFinish(caller, { status: "completed" })
+    expect((await h.store.getRun("run-1"))!.status).toBe("failed")
+  })
+
   it("test_explicit_failure_branch_can_recover_a_failed_node", async () => {
     const h = await makeHarness()
     const flow = makeFlow()

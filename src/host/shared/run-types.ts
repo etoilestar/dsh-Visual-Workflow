@@ -169,6 +169,8 @@ export interface NodeAttempt {
   status: NodeRunStatus
   stopReason?: string
   failure?: RunFailure
+  /** 显式文件产物在本次尝试开始前的签名；null 表示原本不存在。 */
+  outputBaseline?: Record<string, string | null>
 }
 
 export interface RunTermination {

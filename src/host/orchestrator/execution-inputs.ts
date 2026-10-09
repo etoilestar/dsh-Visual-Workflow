@@ -5,6 +5,7 @@ import { ctxInEdges, nodeById, parseExecutionContract } from '../graph/index.js'
 import type { FileNode, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import type { RunSnapshot } from '../shared/types.js'
 import { WfError } from './errors.js'
+import { authorizedInputPath, authorizedOutputPath, outputSignature } from "./execution-file-access.js"
 
 function inputError(message: string, code: string): WfError {
   return Object.assign(new WfError(message, code), { phase: 'node_input', retryable: false })
@@ -22,17 +23,6 @@ export function absoluteInputPath(path: string, cwd?: string): string {
   return resolve(cwd, path)
 }
 
-async function readableFile(path: string): Promise<number> {
-  try {
-    await access(path, constants.R_OK)
-    const info = await stat(path)
-    if (!info.isFile()) throw new Error('not a file')
-    return info.size
-  } catch {
-    throw inputError(`输入文件不存在、不可读或不是普通文件：${path}`, 'WF_INPUT_FILE_UNAVAILABLE')
-  }
-}
-
 function configuredPaths(node: FileNode): string[] {
   return [...new Set([node.data.managedPath, ...(node.data.files ?? []).map((file) => file.managedPath)].filter((path): path is string => typeof path === 'string' && !!path.trim()).map((path) => path.trim()))]
 }
@@ -44,7 +34,7 @@ function configuredAbsolutePath(path: string, snapshot: RunSnapshot, managedRoot
 }
 
 /** 运行绑定独立于图文档；未完成消费者需要的文件才参与启动/恢复预检。 */
-export async function prepareRunInputs(flow: WorkflowDocument, snapshot: RunSnapshot, raw?: unknown, managedRoot?: string): Promise<void> {
+export async function prepareRunInputs(flow: WorkflowDocument, snapshot: RunSnapshot, raw?: unknown, managedRoot?: string, authorizedFiles?: readonly string[]): Promise<void> {
   const bindings = { ...snapshot.fileBindings }
   if (raw !== undefined) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw inputError('fileBindings 必须为文件节点 id 到路径数组的对象', 'WF_BAD_FILE_BINDINGS')
@@ -69,12 +59,12 @@ export async function prepareRunInputs(flow: WorkflowDocument, snapshot: RunSnap
     const paths = bindings[node.id] ?? configuredPaths(node)
     if (!paths.length) throw inputError(`文件节点 ${node.id} 尚未绑定输入文件；请上传文件或传入 fileBindings`, 'WF_INPUT_FILE_UNBOUND')
     bindings[node.id] = paths.map((path) => bindings[node.id] ? absoluteInputPath(path, snapshot.workingDirectory) : configuredAbsolutePath(path, snapshot, managedRoot))
-    await Promise.all(bindings[node.id].map(readableFile))
+    bindings[node.id] = await Promise.all(bindings[node.id].map((path) => authorizedInputPath(path, snapshot.workingDirectory, managedRoot, authorizedFiles)))
   }
   if (Object.keys(bindings).length) snapshot.fileBindings = bindings
 }
 
-export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, managedRoot?: string): Promise<void> {
+export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, managedRoot?: string, authorizedFiles?: readonly string[]): Promise<void> {
   const contract = executionOf(node)
   const edges = ctxInEdges(flow, node.id)
   if (contract.inputSource === 'ctx' && !edges.length) throw inputError(`节点 ${node.id} 声明 ctx 输入却没有 ctx 连线`, 'WF_INPUT_CONTEXT_MISSING')
@@ -90,18 +80,20 @@ export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode
         const paths = snapshot.fileBindings?.[resolved.id] ?? configuredPaths(resolved)
         if (!paths.length) throw inputError(`文件节点未绑定：${resolved.id}`, 'WF_INPUT_FILE_UNBOUND')
         const absolute = paths.map((path) => snapshot.fileBindings?.[resolved.id] ? absoluteInputPath(path, snapshot.workingDirectory) : configuredAbsolutePath(path, snapshot, managedRoot))
-        await Promise.all(absolute.map(readableFile))
+        const authorized = await Promise.all(absolute.map((path) => authorizedInputPath(path, snapshot.workingDirectory, managedRoot, authorizedFiles)))
         snapshot.fileBindings ??= {}
-        snapshot.fileBindings[resolved.id] = absolute
+        snapshot.fileBindings[resolved.id] = authorized
       }
     } else if (resolved?.kind === 'agent' || resolved?.kind === 'parent' || (resolved?.kind === 'start' && flow.mode === 'mode2')) {
       const record = snapshot.nodes.find((entry) => entry.nodeId === resolved.id)
       if (contract.inputSource === 'ctx' && (!record || !['ok', 'react-capped', 'armed'].includes(record.status) || !record.output?.trim())) throw inputError(`上游 ctx 产出尚不可用：${resolved.id}`, 'WF_INPUT_CONTEXT_MISSING')
     }
   }
-  await Promise.all((contract.requiredFiles ?? []).map((path) => readableFile(absoluteInputPath(path, snapshot.workingDirectory))))
+  await Promise.all((contract.requiredFiles ?? []).map((path) => authorizedInputPath(absoluteInputPath(path, snapshot.workingDirectory), snapshot.workingDirectory, managedRoot, authorizedFiles)))
+  const outputBaseline: Record<string, string | null> = {}
   for (const path of contract.outputFiles ?? []) {
     const absolute = absoluteInputPath(path, snapshot.workingDirectory)
+    const canonical = await authorizedOutputPath(absolute, snapshot.workingDirectory)
     let directory = dirname(absolute)
     while (true) {
       try {
@@ -114,7 +106,10 @@ export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode
         directory = dirname(directory)
       }
     }
+    outputBaseline[absolute] = (await outputSignature(canonical))?.signature ?? null
   }
+  const attempt = snapshot.nodes.find((entry) => entry.nodeId === node.id)?.attemptHistory?.at(-1)
+  if (attempt && Object.keys(outputBaseline).length) attempt.outputBaseline = outputBaseline
 }
 
 /** 完成事件的产物检查只认文件系统事实，不根据最终回复中的路径判成功。 */
@@ -122,9 +117,14 @@ export async function verifyNodeArtifacts(node: RoleNode, snapshot: RunSnapshot,
   const artifacts: NonNullable<RunSnapshot['nodes'][number]['artifacts']> = []
   for (const path of executionOf(node).outputFiles ?? []) {
     const absolute = absoluteInputPath(path, snapshot.workingDirectory)
-    let size: number
-    try { size = await readableFile(absolute) } catch { throw Object.assign(new WfError(`节点声称完成但声明产物不存在或不可读：${absolute}`, 'WF_OUTPUT_FILE_MISSING'), { phase: 'run_finish', retryable: false }) }
-    artifacts.push({ path: absolute, size, verifiedAt: new Date(now).toISOString() })
+    let current: Awaited<ReturnType<typeof outputSignature>>
+    try { current = await outputSignature(await authorizedOutputPath(absolute, snapshot.workingDirectory)) } catch (error) {
+      throw Object.assign(new WfError(`声明产物无法验证：${absolute}`, error instanceof WfError ? error.code : "WF_OUTPUT_FILE_MISSING"), { phase: "run_finish", retryable: false })
+    }
+    if (!current) throw Object.assign(new WfError(`节点声称完成但声明产物不存在或不可读：${absolute}`, "WF_OUTPUT_FILE_MISSING"), { phase: "run_finish", retryable: false })
+    const baseline = snapshot.nodes.find((entry) => entry.nodeId === node.id)?.attemptHistory?.at(-1)?.outputBaseline
+    if (!baseline || !(absolute in baseline) || baseline[absolute] === current.signature) throw Object.assign(new WfError(`声明产物没有本次尝试的写入证据：${absolute}；已有文件不能替代本次执行，请重新生成`, "WF_OUTPUT_FILE_STALE"), { phase: "run_finish", retryable: false })
+    artifacts.push({ path: absolute, size: current.size, verifiedAt: new Date(now).toISOString() })
   }
   if (artifacts.length) {
     const record = snapshot.nodes.find((entry) => entry.nodeId === node.id)

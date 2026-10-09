@@ -229,7 +229,7 @@ describe('childKey / nodeChildSignature / pickProviderName', () => {
     // 工作流节点必须走 spawn（own session / own system prompt / zero parent context），否则父代理对话/提示词整段泄露给子节点。
     expect(pickProviderName(['fork', 'spawn'])).toBe('spawn')
     expect(pickProviderName(['spawn'])).toBe('spawn')
-    // 仅 fork 可用（spawn 未注册）时仍可回退，保证运行可用而非崩溃
+    // 有隔离 provider 时可选择它；仅 fork 时拒绝启动。
     expect(pickProviderName(['fork', 'acp'])).toBe('acp')
     expect(pickProviderName(['fork'])).toBeNull()
   })
@@ -502,7 +502,7 @@ describe('NodeAgentRunner 创建/复用/派发', () => {
     const h3 = await makeHarness()
     await h3.store.saveToolCombo({ id: 'combo-c1', name: 'c1', tools: ['read'], mcpServers: [] })
     h3.subagents.providers = []
-    await expect(h3.runner.ensureNodeChild(taskInput())).rejects.toThrow(/没有可用的隔离子代理 provider/)
+    await expect(h3.runner.ensureNodeChild(taskInput())).rejects.toMatchObject({ code: "WF_ISOLATED_PROVIDER_UNAVAILABLE", message: expect.stringContaining("@deepseek-ai/dsh-subagent-spawn-in-process"), retryable: false })
   })
 
   it('startNodeTask 复用派发：走 sendMessage（相邻 Agent 通道，signal 透传），立即返回', async () => {

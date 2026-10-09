@@ -701,7 +701,7 @@ export class NodeAgentRunner implements NodeRunner {
     if (existing && existing.signature === signature) return { childId: existing.childId, created: false }
 
     const provider = detectSubagentProvider(subagents)
-    if (!provider) throw new Error('没有可用的隔离子代理 provider（预期 spawn；fork 会继承父历史，不能用于独立节点）')
+    if (!provider) throw Object.assign(new Error("没有可用的隔离子代理 provider；请在 DSH profile 启用 @deepseek-ai/dsh-subagent-spawn-in-process 或安装支持隔离的 provider。fork 会继承父历史，不能用于独立节点"), { code: "WF_ISOLATED_PROVIDER_UNAVAILABLE", phase: "child_start", retryable: false })
     const agentOptions: { provider?: string; model?: string } = {}
     if (node.data?.provider) agentOptions.provider = node.data.provider
     if (node.data?.model) agentOptions.model = node.data.model

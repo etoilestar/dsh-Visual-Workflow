@@ -53,6 +53,23 @@ function hostWith(session: unknown): CordisAgentHost {
 }
 
 describe('CordisAgentHost 会话事件读取（0.1.2 seq/eventAt 与 0.1.1 events 双形状兼容）', () => {
+  it.each([rc1Session, rc2Session])("test_authorized_external_files_require_owning_user_event_and_official_attachment_resolution", (sessionOf) => {
+    const ref = { attachmentId: "admitted-id", name: "input.txt", bytes: 3 }
+    const events = [
+      { type: "user/message", data: { source: { kind: "user" }, content: [{ type: "file", attachment: ref }] } },
+      { type: "assistant/message", data: { message: { content: [{ type: "file", attachment: { ...ref, attachmentId: "assistant" } }] } } },
+      { type: "user/message", data: { source: { kind: "coordinator" }, content: [{ type: "file", attachment: { ...ref, attachmentId: "coordinator" } }] } },
+      { type: "user/message", data: { source: { kind: "user" }, content: [{ type: "text", text: "/external/not-authorized" }, { type: "file", attachment: { ...ref, attachmentId: "revoked" } }] } },
+    ]
+    const references: unknown[] = []
+    const ctx = { get: (name: string) => name === "agents" ? { get: () => ({ session: sessionOf(events) }) } : name === "attachments" ? { fileHostPath: (value: typeof ref) => {
+      references.push(value)
+      if (value.attachmentId !== "admitted-id") throw new Error("invalid reference")
+      return "/external/input.txt"
+    } } : undefined } as never
+    expect(new CordisAgentHost(ctx).authorizedInputFiles("s1")).toEqual(["/external/input.txt"])
+    expect(references).toEqual([ref, { ...ref, attachmentId: "revoked" }])
+  })
   it('latestTurnEnd：0.1.1 与 0.1.2 形状命中同一 turn/end(error)（最新一条）', () => {
     const events = sampleEvents()
     const host2 = hostWith(rc2Session(events))

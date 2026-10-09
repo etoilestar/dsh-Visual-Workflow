@@ -320,7 +320,7 @@ describe('TeamGroupRunner.start（失败与诊断路径）', () => {
 
   it('无可用 provider：抛出明确错误', async () => {
     const h = await makeHarness({ provider: 'missing' })
-    await expect(h.runner.start(groupInput())).rejects.toThrow(/没有可用的子代理 provider/)
+    await expect(h.runner.start(groupInput())).rejects.toMatchObject({ code: "WF_ISOLATED_PROVIDER_UNAVAILABLE", message: expect.stringContaining("@deepseek-ai/dsh-subagent-spawn-in-process") })
   })
 
   it('成员组成签名变化：复用既有成员并给出告警（官方成员在会话内不可重建）', async () => {

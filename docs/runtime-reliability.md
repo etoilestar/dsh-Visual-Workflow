@@ -123,6 +123,12 @@ CSV 结果：11 条记录、1 条完全重复、2 个空单元格、9 条有效�
 
 ## 5. API 兼容性与剩余限制
 
+第二轮兼容性收敛：运行期绑定及显式 `requiredFiles` 只接纳实际会话工作区、插件 `data/files` 受管目录和该会话用户消息中的官方已接纳附件。外部附件由公开 `ctx.attachments.fileHostPath(ref)` 解析，路径文字或调用方传入的布尔授权不授予权限；`realpath` 防止软链接越界。Docker 挂载应使用实际会话 cwd；已有 `managedPath` 仍相对插件数据目录。文件授权在节点派发前重新核验。
+
+显式 `outputFiles` 必须在工作区内，本次尝试开始时记录文件签名，在结算时检查本次写入证据。未变化的旧文件返回 `WF_OUTPUT_FILE_STALE`；不存在返回 `WF_OUTPUT_FILE_MISSING`。签名只证明文件变化，不能证明内容正确或排除同一工作区其他进程的并发写入。未声明文件产物的旧节点不增加文件要求。
+
+独立节点优先使用 `spawn`，其他现有隔离 provider 保持可选。fork-only 环境返回 `WF_ISOLATED_PROVIDER_UNAVAILABLE`，应在实际 DSH profile 启用 `@deepseek-ai/dsh-subagent-spawn-in-process`，或安装支持隔离的 provider；不使用继承全部父历史的 fork 兜底。Team 无隔离 provider 时沿既有逐节点路径得到相同错误。
+
 - 已实测官方 0.2.0-rc.2 的公开 `tools.get/schemas/restrict/guard` 和 Scope 接口；Host 通过服务能力探测适配，不依赖私有 `tools.view`。未宣称覆盖全部历史 DSH 版本。缺少必要 guard、Preset 解析或独立子代理 provider 时明确失败；仅有 fork 时不以父历史作为兜底。
 - `execution`、诊断及文件绑定字段均可选，旧模板和快照可读取；自然语言 `inputSchema/outputSchema` 保持柔性。未声明强制 ctx 的旧图保持原来的可选上下文语义；`flow` 仍只负责执行顺序，`db-in` 仍决定数据库能力。
 - `run/runResume` 新增可选 `fileBindings: {文件节点id: [路径]}`。HTTP 请求保持 `{args: ...}`，成功结果保持 `{ok:true,value:...}`。绑定按本次运行持久化；续跑可继承或重新绑定，不改写原实例。

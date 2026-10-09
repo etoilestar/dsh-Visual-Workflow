@@ -97,6 +97,8 @@ export interface OrchestratorDeps {
     resolveRolePrompt?: (node: RoleNode) => Promise<string>;
     /** 从官方会话 header 读取实际 cwd；不以插件进程 cwd 猜测用户工作区。 */
     workingDirectory?: (sessionId: string) => Promise<string | undefined>;
+    /** 官方会话已接纳的附件路径；调用方不能通过 fileBindings 授予宿主文件权限。 */
+    authorizedInputFiles?: (sessionId: string) => Promise<readonly string[]>;
     /** 配置子集。 */
     config: OrchestratorConfig;
     /**

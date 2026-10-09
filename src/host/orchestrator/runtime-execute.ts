@@ -160,7 +160,7 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
 
     try {
-      await preflightNodeInputs(flow, node, run.snapshot, this.deps.store.root)
+      await preflightNodeInputs(flow, node, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(run.snapshot.sessionId))
       const blocks = buildNodeBlocks({
       flow,
       node,
@@ -324,7 +324,7 @@ export class RuntimeExecute extends RuntimeLaunch {
       const member = plans.find((plan) => plan.node.id === nodeId)?.node
       setNodeStatus(run.snapshot, nodeId, 'running', { attempts: count, now: this.now(), provider: member?.data.provider || run.snapshot.parentRoute?.provider, model: member?.data.model || run.snapshot.parentRoute?.model })
       await this.persistWarn(run)
-      if (member) await preflightNodeInputs(flow, member, run.snapshot, this.deps.store.root)
+      if (member) await preflightNodeInputs(flow, member, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(sessionId))
     }
     const onMemberStarted = async (member: GroupStartResult['members'][number]): Promise<void> => {
       await onMemberStarting(member.nodeId)
@@ -423,9 +423,15 @@ export class RuntimeExecute extends RuntimeLaunch {
     const records = new Map(snapshot.nodes.map((record) => [record.nodeId, record]))
     const idOf = (id: string) => mainNodeIdOf(flow, id) ?? id
     const settled = (id: string) => ["ok", "react-capped", "armed"].includes(records.get(idOf(id))?.status ?? "")
+    const selected = new Set(snapshot.nodes.filter((record) => record.attempts > 0 || settled(record.nodeId)).map((record) => record.nodeId))
+    // 无执行次数的 pause/group 等结构节点也可能承载已选择的业务路径。
+    for (const id of selected) for (const line of lines) if (!line.condition && idOf(line.target) === id) selected.add(idOf(line.source))
     // 无条件可达的路径是必需路径；条件选择仍由父代理决定，不把未选分支全部强制执行。
     const required = new Set(flow.nodes.filter((node) => node.kind === "start").map((node) => node.id))
-    for (const id of required) for (const line of lines) if (idOf(line.source) === id && !line.condition) required.add(idOf(line.target))
+    for (const id of required) for (const line of lines) {
+      const target = idOf(line.target)
+      if (idOf(line.source) === id && (!line.condition || selected.has(target))) required.add(target)
+    }
     const requiredFailures = snapshot.nodes.filter((record) => {
       if (record.status !== 'fail') return false
       const recovered = lines.some((line) => idOf(line.source) === record.nodeId && line.condition && line.condition.type !== "pass" && settled(line.target))

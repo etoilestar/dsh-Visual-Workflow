@@ -120,7 +120,7 @@ export class TeamGroupRunner {
     const subagents = this.deps.subagents()
     if (!subagents) return null
     const provider = this.deps.detectProvider(subagents)
-    if (!provider) throw new Error('没有可用的子代理 provider（协作组成员无法创建）')
+    if (!provider) throw Object.assign(new Error("协作组没有可用的隔离子代理 provider；请在 DSH profile 启用 @deepseek-ai/dsh-subagent-spawn-in-process 或安装支持隔离的 provider，fork 会继承父历史"), { code: "WF_ISOLATED_PROVIDER_UNAVAILABLE", phase: "child_start", retryable: false })
 
     const disabledTools = await this.deps.toolSwitches?.()
     // 每个成员的官方身份与组成：
