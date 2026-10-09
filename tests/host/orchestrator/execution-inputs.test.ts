@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { buildNodeBlocks } from '../../../src/host/orchestrator/task-blocks.js'
 import { caller, cleanupTempDirs, makeHarness, makeFlow, fileNode, start } from './fixtures/harness.js'
@@ -14,6 +14,41 @@ function withFile() {
 }
 
 describe('explicit execution inputs and artifacts', () => {
+  it.each([undefined, {}, { inputSource: "workspace" as const, requiredFiles: ["shared.txt"] }])("test_text_and_workspace_tasks_keep_soft_schemas_and_empty_output_without_ctx_or_output_files_%j", async (execution) => {
+    const h = await makeHarness(undefined, { workingDirectory: async () => h.dir })
+    await writeFile(join(h.dir, "shared.txt"), "shared workspace")
+    const flow = makeFlow()
+    const node = flow.nodes.find((node) => node.id === "n-a1")!
+    if (node.kind !== "agent") throw new Error("fixture")
+    node.data.execution = execution
+    node.data.inputSchema = "自由文本或工作区信息"
+    node.data.outputSchema = "允许纯文本或工具副作用，无返回文本也可结束"
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: node.id })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
+    await h.runtime.wfFinish(caller, { status: "completed" })
+    expect((await h.store.getRun("run-1"))!.status).toBe("completed")
+    expect((await h.store.getWorkflow("session-1", flow.id))!.nodes.find((entry) => entry.id === node.id)).toMatchObject({ data: { inputSchema: node.data.inputSchema, outputSchema: node.data.outputSchema } })
+  })
+
+  it("test_output_authorization_is_rechecked_after_directory_symlink_swap", async () => {
+    const outside = await makeHarness()
+    await writeFile(join(outside.dir, "result.txt"), "external")
+    const h = await makeHarness(undefined, { workingDirectory: async () => h.dir })
+    await mkdir(join(h.dir, "output"))
+    const flow = makeFlow()
+    const node = flow.nodes.find((node) => node.id === "n-a1")!
+    if (node.kind !== "agent") throw new Error("fixture")
+    node.data.execution = { outputFiles: ["output/result.txt"] }
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: node.id })
+    await rm(join(h.dir, "output"), { recursive: true })
+    await symlink(outside.dir, join(h.dir, "output"))
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
+    const record = (await h.store.getRun("run-1"))!.nodes.find((entry) => entry.nodeId === node.id)!
+    expect(record).toMatchObject({ status: "fail", failure: { code: "WF_OUTPUT_PATH_UNWRITABLE" } })
+    expect(record.artifacts).toBeUndefined()
+  })
   it("test_managed_multiple_files_without_workspace_keep_existing_managed_path_semantics", async () => {
     const h = await makeHarness()
     await mkdir(join(h.dir, "data/files"), { recursive: true })

@@ -1,6 +1,6 @@
 # 运行可靠性修复与验收记录
 
-基于 `main` 的 `2ddabe3`，分阶段提交：A `f618357`，B `8909b2a`，C `487192b`。未合并上游，未修改官方 DSH 核心或仓库的依赖声明和锁文件。
+PR [#6](https://github.com/etoilestar/dsh-Visual-Workflow/pull/6) 保留第一轮 A `f618357`、B `8909b2a`、C `487192b`。第二轮以原 PR HEAD `4007d9c7ced9edd2d2ff57884ce441f777d76921` 为基线，在原分支 `codex-runtime-reliability-fixes` 继续提交：A `c8d3cff`、B `cb6cf09`、C 为本报告所在的回归文档提交，完整 SHA 见 PR 提交列表和交付回复。不新建 PR，不自动合并；未修改官方 DSH 核心、依赖声明或锁文件。第二轮逐文件行数和审查报告见第 8 节。
 
 代码、完整回归、官方工具 Scope 检查和插件 HTTP 检查已完成。真实模型驱动的五节点销售流程尚未执行：环境没有可用的 provider/model 与凭据配置名称。确定性销售测试使用测试替身执行节点，不能替代这项验收。
 
@@ -10,7 +10,7 @@
 |---|---|
 | 父代理工具目录不等于子代理可限制的继承工具集合 | 官方 `tools.restrict` 对未知继承工具抛错；自身注册工具不受该继承过滤器约束。改为创建窗口中的实际子 Scope 校验，先装执行 guard，再探测继承名单；自身获准工具走 guard，父代理专属工具始终拒绝。 |
 | `subagent` 可能只存在于父 Scope | 在实际子 Scope 缺失时不将其送入 restrict；其他明确请求但缺失的工具拒绝启动。官方运行时检查复现该作用域差异并验证可调用与拒绝调用。 |
-| 空名单与未配置名单不能混用 | 显式 `[]` 保持拒绝业务工具；未配置限制保留继承语义，仍禁止父代理专属工具。空名单随持久化会话事件恢复，权限安装失败保留 guard 并让创建失败。 |
+| 空名单与未配置名单不能混用 | 显式 `[]` 保持拒绝业务工具；未配置限制保留继承语义，仍禁止父代理专属工具。空名单随持久化会话事件恢复；第二轮权限安装失败释放已装贡献并让创建失败，未装配成功不能发布或派发。 |
 | 子代理创建事件中的权限错误必须回传 | 官方创建事件串行等待监听器。Host 现在等待必要的权限安装，不再将该错误作为可忽略的贡献装配错误。没有 guard 或无法解析 Preset 时明确失败。 |
 | 恢复起点依赖数组顺序 | 原先可选中 `start`。现在按拓扑和检查点推导业务调度前沿，并分别保存暂停检查点与 `resumeNodeIds`；完成节点继承完整输出和回合记录。 |
 | 创建失败缺少轨迹、结构化异常变成 `[object Object]` | 启动前落盘尝试记录，失败保存 phase/code/message/retryable；错误提取支持结构化 message/error/code。终止来源区分父代理错误、主动收尾、用户停止、空闲超时等。 |
@@ -20,11 +20,11 @@
 
 对原故障分别作以下判断：
 
-- `run-mv0cdav5-n9bj28` 的摘要明确显示空闲超时停止；`load_data` 失败两次，原快照没有 stopReason/底层异常。历史中的 unknown `subagent` 是已经发生的权限异常，但不能证明它是两次失败的唯一原因。
-- `run-mv0qd0me-p6nya1` 的摘要明确显示父代理执行出错，业务节点均未尝试。`resumeFromNodeId=start` 是已经验证的恢复计算缺陷；原摘要的 `[object Object]` 丢失了底层异常，不能证明该缺陷直接造成父代理失败。
+- `run-mv0cdav5-n9bj28` 因空闲超时停止；`load_data` 失败两次，但父代理之后仍完成回合。第二轮使用公开 Agent.status 修复父活动漏判。原两次节点失败的完整底层异常仍未取得，不能证明权限异常是唯一原因。
+- 用户补充证实 `run-mv0qd0me-p6nya1` 与首次共用 session-53b07d54-0282-4034-ad96-d8d1ee0a6f4d：turn/end seq=166，kind=error，code=CONTEXT_WINDOW_EXCEEDED，message=400 status code (no body)，业务节点均 attempts=0。第二轮保留真实错误并给出官方 token meter/compaction 检查说明。恢复前沿选错 start 也是缺陷，不能据此认定窗口错误的根因；当时实际模型、窗口及压缩状态仍需部署证据。
 - 修复不回填不存在的历史证据。新运行应使用新增诊断字段定位具体失败阶段。
 
-## 2. 逐文件修改
+## 2. 第一轮逐文件修改（历史记录）
 
 以下路径相对仓库根目录；`lib/` 与声明文件同步由构建生成。
 
@@ -105,21 +105,22 @@ PR #3 的职责覆盖、重复职责、局部图修复和 PR #5 的 Dify parser/
 | 检查 | 结果 |
 |---|---|
 | `pnpm typecheck` | 通过。 |
-| `pnpm test --maxWorkers=3` | 191 文件、2141 测试通过。 |
+| `pnpm test --maxWorkers=3` | 第二轮最终 192 文件、2168 测试通过。 |
 | `pnpm build` | 通过，Host/Client/声明产物生成。 |
 | `pnpm client-smoke` | 通过。 |
-| `pnpm check` | 类型检查、191 文件/2141 测试、构建与 client-smoke 通过。 |
+| `pnpm check` | 第二轮再次完整通过：类型检查、192 文件/2168 测试、构建与 client-smoke。A、B 提交分别通过 2152、2162 项完整检查。 |
 | 环境安装脚本 | 外部依赖安装、隔离构建、client-smoke、官方插件 link 实际通过。 |
-| 官方 Scope 脚本 | 14 次真实工具执行通过，包括允许/拒绝、空名单、安装失败拒绝；未调用模型。 |
+| 官方 Scope 脚本 | 第二轮 15 次真实工具执行、2 个恢复钩子返回结果和同一父 Scope 的 2 次模型路由更新通过；未执行模型或真实压缩。 |
 | 重启后的 DSH HTTP | 启动认证 303，`toolCombos`、`activeRuns` 均 HTTP 200 且 `ok=true`。 |
 | 真实服务准备销售实例 | `createSession`、`putWorkflow` 成功，未启动模型运行。 |
 | 真实服务拒绝缺失 CSV | `run` 返回 HTTP 422、`WF_INPUT_FILE_UNAVAILABLE`，未启动模型运行。 |
+| 第二轮真实服务拒绝越权文件 | `run` 返回 HTTP 403、`WF_INPUT_FILE_UNAUTHORIZED`，activeRuns=0；未启动模型运行。 |
 | 销售确定性集成 | 五个节点均 ok、每个一次尝试、真实中间文件和报告核验、Run completed、锁释放。 |
 | 真实模型销售端到端 | **未运行**：缺 provider/model 和可用凭据配置名称；脚本在缺少配置时拒绝启动。 |
 
 CSV 结果：11 条记录、1 条完全重复、2 个空单元格、9 条有效记录；总额 15900，平均 1766.67，最大 S001/6000，最小 S010/200。确定性测试的文件位于测试临时目录，完成后清理；它不是部署工作区的真实模型报告。
 
-检查日志位于云环境 `/workspace/.cloud-env/final-check.log`；安装日志 `/workspace/.cloud-env/install-validation.log`。原仓库锁文件的 `yaml@2.8.1` 缺少 resolution；安装脚本仅在外部副本补入注册表实际 integrity，并 frozen 安装。仓库锁文件保持原样。
+第二轮日志位于 `/tmp/round2-final-typecheck.log`、`round2-final-test.log`、`round2-final-build.log`、`round2-final-client-smoke.log`、`round2-final-check.log`；Scope/HTTP 结果位于同目录 `round2-final-scope.json`、`round2-final-http.json`。原仓库锁文件的 yaml 缺 resolution；安装仅在外部副本修复，仓库锁文件保持原样。
 
 ## 5. API 兼容性与剩余限制
 
@@ -133,10 +134,10 @@ CSV 结果：11 条记录、1 条完全重复、2 个空单元格、9 条有效�
 - `execution`、诊断及文件绑定字段均可选，旧模板和快照可读取；自然语言 `inputSchema/outputSchema` 保持柔性。未声明强制 ctx 的旧图保持原来的可选上下文语义；`flow` 仍只负责执行顺序，`db-in` 仍决定数据库能力。
 - `run/runResume` 新增可选 `fileBindings: {文件节点id: [路径]}`。HTTP 请求保持 `{args: ...}`，成功结果保持 `{ok:true,value:...}`。绑定按本次运行持久化；续跑可继承或重新绑定，不改写原实例。
 - 受管文件的 `data/files/...` 相对插件数据根目录；运行期相对路径依赖实际会话 cwd，不回退到 Host 进程 cwd。文件系统检查证明可访问，不能证明模型已阅读。远程 ACP 等独立文件系统必须自行挂载/传输同一输入，目前未验证。
-- 声明产物检查证明文件实际存在、可读并记录大小/时间；不自动证明内容正确、由本次新写或符合所有业务要求。销售验收脚本另行核验统计内容及报告；每次验收应使用新的空工作区，避免旧产物误导。
-- 已声明契约的失败节点不能被 `wf_finish(completed)` 覆盖。旧图的条件分支与既有收尾机制保持兼容，因此未为所有历史流程强制“每个业务节点都必须执行”。销售脚本另行断言五个业务节点全部完成。
+- 第二轮声明产物检查核验本次尝试开始前的元数据和内容签名，原样旧文件不能替代本次写入。签名不自动证明内容正确、模型实际阅读过或排除同工作区其他进程的并发写入；销售脚本另核验统计内容。
+- 第二轮通用成功判定不再依赖 execution：无条件必需路径及实际已选条件路径上的失败不能被 wf_finish(completed) 掩盖。运行中节点、已完成业务节点的必需前驱未完成时拒绝成功收尾；合法失败恢复分支、未选分支及提前终止保留。
 - 新增日志只记录关联字段和脱敏错误，不打印文件全文或凭据。原异常文字可能丢失或无法解析；不会据此编造模型错误的具体原因。provider/model 配置值与首请求后的实际值通过请求路由记录区分。
-- 2141 项是完整回归结果；本次没有采集新增代码覆盖率百分比，不能据测试数量声明达到 80%。外部模型、远程 provider 与外部数据库的验收仍需对应环境。
+- 2168 项是第二轮最终完整回归结果；未采集新增代码覆盖率百分比，不能据数量声明达到 80%。外部模型、远程 provider、数据库及 MCP 服务仍需对应部署验收。
 - 完整测试日志包含缺失 source map 的诊断，类型检查、测试及构建仍通过；本次没有修复调试映射问题。
 - 所有经验仍须多选卡片人工确认；零经验直接结束，零选择正常返回零入库。验收脚本不会自动批准经验。
 
@@ -201,3 +202,86 @@ docker compose exec "$task_service" cat "$task_workspace/live-run.json"
 安装脚本和启动说明保存在环境配置草稿中，隔离安装路径为 `/workspace/.cloud-env`。脚本已实际安装、构建、link；启动说明对应本次真实成功的服务启动和检查。没有新增凭据要求或扩大现有网络访问域。
 
 草稿保存不等于配置发布；需要在环境设置中审阅、保存并发布。远端 main 在修复合并前不包含这些更改；新建环境需选择含修复的分支或保留当前工作区快照。本次未验证新建环境的代码恢复结果，不能以环境安装成功替代代码版本复现验收。
+
+## 8. 第二轮增量审查报告
+
+### 已确认修复与新增配置
+
+首建、重发布、冷恢复统一安装一次权限策略；重发布先释放旧贡献，中途错误及会话装配事件写入失败均释放贡献并中止创建。测试区分权限 guard 与独立 ReAct guard，不将总 guard 数误当权限贡献数。工具类型通过同一实际 agent key 的 get/restrict/get 区分；临时空继承限制在 finally 释放，不读私有 tools.view，不匹配异常文字。
+
+Watchdog 使用公开父 Agent.status，保护模型、工具及压缩活动；子代理活动仍独立检测。父错误在最终 turn/end 且父代理已 idle 后优先处理。真正空闲仍按默认 30 分钟停止；可选 runExecutionTimeoutMs 默认两小时、0 关闭，独立记录 execution_timeout。暂停不参加扫描，恢复按新 Run 开始计时；保留 aborted 与用户明确 stop 的区别。
+
+纯编排恢复不再重复目标、整图、责任及历史记录，改用稳定事实文件引用和当前调度前沿/预算；混合模式的必要父任务保留。继续复用原 Session，不偷偷丢弃历史或改大 contextWindow。模型选择贡献只参与 system-prompt/assemble 和 agent/request，不拦截官方 agent/pre-step 或 agent/request-error；官方 Scope 检查验证这两个恢复钩子的返回结果能通过父贡献，但没有执行真实模型压缩。
+
+没有普遍新增强制配置：execution、文件输入/输出和 ctx 仍可选，自然语言 schema 保持柔性。显式 outputFiles 需要实际会话 cwd 及本次写入证据；fork-only 环境需要启用隔离 provider。新增执行时限有默认值，部署应按业务时长审阅两小时保护或设为 0。Docker 挂载用实际 cwd，受管 data/files 相对插件 dataDir；普通绝对路径不能自行授权宿主机外部文件。
+
+### 源文件与实际行数
+
+相对本轮基线 4007d9c：**20 个 Host 源文件，新增 266 行、删除 85 行**。下列为缺陷修复及必要可选契约扩展；脚本、测试和生成文件不计入源码行数。未修改 Client 源码。
+
+| 文件（src/host/ 下） | + / - | 原因、旧接口影响 |
+|---|---:|---|
+| agent/agents-host.ts | 25 / 0 | 官方用户附件引用读取；新增内部能力。 |
+| agent/child-tool-filter.ts | 28 / 27 | 单策略和失败清理；保留 undefined / [] 区别。 |
+| agent/group-runner.ts | 1 / 1 | Team 隔离 provider 的稳定可操作错误。 |
+| agent/runner.ts | 1 / 1 | fork-only 明确启用 spawn 的办法。 |
+| api/routes.ts | 1 / 0 | 未授权文件映射 403，端点/包格式不变。 |
+| config.ts | 5 / 1 | 可选执行时限及唯一默认值。 |
+| orchestrator/directive.ts | 2 / 1 | 精简纯编排恢复注入。 |
+| orchestrator/execution-file-access.ts | 69 / 0 | 本模块内路径授权与签名，无新上传/沙箱服务。 |
+| orchestrator/execution-inputs.ts | 20 / 20 | 授权预检及逐尝试产物基线，仅严格校验显式要求。 |
+| orchestrator/run-entry.ts | 2 / 0 | 可选官方附件能力注入，不能通过 fileBindings 自行授权。 |
+| orchestrator/runtime-base.ts | 9 / 0 | 公开父状态与独立执行时限。 |
+| orchestrator/runtime-execute.ts | 33 / 7 | 旧图通用成功判定及派发前授权重检。 |
+| orchestrator/runtime-launch.ts | 2 / 2 | 首次/恢复共用授权预检。 |
+| orchestrator/runtime-lifecycle.ts | 4 / 2 | 原始窗口错误及官方恢复检查说明。 |
+| orchestrator/seams.ts | 1 / 0 | 可选执行时限配置缝。 |
+| orchestrator/watchdog.ts | 22 / 7 | 父活动保护、真空闲、父错误及执行超时。 |
+| prompts/index.ts | 1 / 0 | 恢复构建器导出。 |
+| prompts/orchestration.ts | 17 / 1 | 精简恢复并保留必要调度契约。 |
+| shared/run-types.ts | 3 / 1 | execution_timeout 和可选输出基线；旧快照可读。 |
+| visual-workflow-host.ts | 20 / 14 | 单入口装配、失败清理与能力注入。 |
+
+lib 均由源码构建，产物随 A、B 同步以支持独立审查；最终连续两次构建的 **502 个已跟踪 lib 文件哈希全部一致**。相对本轮基线的 src/host/importer 和 lib/importer 都零变更。第一轮补齐的是主线已有 Dify 源码的缺失生成文件，没有改写导入行为。
+
+### 通用兼容矩阵
+
+| 场景 | 实际回归与边界 |
+|---|---|
+| 纯文本/空输出/工具副作用 | 新 execution-inputs 参数化测试：无/空 execution 可正常完成；schema 原样保留，无实体文件要求。 |
+| 共享工作区 | 新 workspace + requiredFiles 无 ctx 连线通过。 |
+| DAG/旧模板无 execution | 原 reliability/resume 及新必需失败、已选条件路径失败、前驱未完成、未选分支/失败恢复/提前终止测试通过。 |
+| CSV | 原真实文件处理 Fixture 和五节点确定性回归保留，通过。 |
+| 文件节点多文件 | 新 managedPath + files[] 解析和去重通过；无 cwd 的合法受管文件可用。 |
+| MCP/PTC/Combo/Preset | 原权限、runner、tools-view 用例及官方 MCP/Preset Scope 检查通过；外部 MCP 未接入。 |
+| 数据库 | 原 db-in 权限、wf-db-query 和索引测试通过，无强制 ctx 文件要求；外部数据库未接入。 |
+| Team | 原成员权限/状态/部分失败测试通过；fork-only 明确报错，真实模型 Team 待部署。 |
+| Mode2 | 原 runtime-service、服务管理及 workflow-e2e 阻塞/完成/用户隔离测试通过；外部模型服务待部署。 |
+| 暂停/恢复 | 原拓扑前沿、pause、成功检查点不重跑及新精简恢复指令通过。 |
+| 上下文超限 | 新零业务尝试测试保留原 code/message/parent_error；历史压缩根因待部署。 |
+| 父长请求/子忙/真空闲/用户停止 | Watchdog 明确区分 idle_timeout、parent_error、execution_timeout、user_stop；原取消/暂停语义保留。 |
+| 旧产物/越界路径 | 新原样旧文件失败、重生成成功、绝对/../ /软链接拒绝、附件授权重检及结算前目录软链接替换拒绝。 |
+| Dify/责任图谱 | 原 parser/importer、覆盖/重复/局部修图回归通过，无相关源码/产物变更。 |
+
+旧测试变更原因：finish 用例先真实结算正在执行的 child；“终态后忽略迟到事件”用例改用明确 failed 收尾，保留原目的；Team 工具替身按公开 get/restrict 实际过滤继承面。另一个既有 FlowStore 排序测试初次全量运行因两次写入同毫秒失败；保存会覆盖传入 updatedAt，改为仅控制 Date，保证第二次保存较晚，保留全部原排序/会话断言，不改变产品存储行为。
+
+### 部署只读诊断与剩余验收
+
+Node.js 24+ 支持普通 JSONL 和官方 Zstd 日志：
+
+```bash
+node scripts/dsh-context-diagnostics.mjs \
+  --session /实际路径/session.v4.jsonl.zstd \
+  --inventory /实际路径/pluginInventory.list.json \
+  --runtime-log /实际路径/dsh-web.log
+```
+
+inventory/runtime-log 可省略；缺证据显示 unknown。inventory 使用 DSH 官方插件管理界面的只读 pluginInventory.list 快照，含 entries / agentPresets / enabled / fiberPhase，保存为 JSON；脚本读取会话头 agentPreset，或用 --preset 实际presetId 指定，不以其他 preset 活跃插件证明本会话加载。当前 inventory 不能证明历史故障时状态。
+
+脚本列出实际 request/context 的 provider/model/contextWindow，以及 compaction/start、summary、summary-error、end、turn/end 的阶段和有限错误信息，不输出用户正文、摘要正文或 rawOutput。官方 0.2.0-rc.2 的 compaction/summary-error 是恢复瀑布钩子，不保证成为持久化会话事件，因此另提取官方压缩失败警告。没有 start 仅表示所给日志未观测到，需要核对日志完整性。
+
+本环境读取实际“已准备但未推理”的 Zstd 会话成功，路由、窗口、加载状态如实 unknown；确定性 Zstd 样本另验证窗口、压缩阶段及最终错误、内容不泄露、原文件字节/mtime 不变。该样本不能作为历史部署证据。
+
+真实模型 E2E 分别报告：**已执行并通过：无；已执行但模型失败：无；当前无法执行：销售五节点、历史同会话压缩恢复和远程 provider**。live 脚本因缺 provider/model 被配置检查拒绝，没有发模型请求。准备实例及 HTTP 预检通过不等于模型 E2E。
+
+合并前人工执行：在实际 Docker/profile 更新并重建/link 此分支；妥善处理活动运行后重启；获取故障父 Session 的实际模型/窗口、父 preset active 插件、压缩进展/警告/重试和最终错误；配置现有安全凭据后执行第 6 节真实销售脚本并检查内容；另外在原 Session 验证长请求、暂停/失败恢复和成功节点不重跑，并实测 MCP、数据库、Team、Mode2。审阅两小时执行保护和实际工作区挂载；fork-only 启用隔离 provider；经验仍由原有卡片人工确认，不自动批准。本环境没有 Docker daemon，上述 Compose 和模型场景均待部署。

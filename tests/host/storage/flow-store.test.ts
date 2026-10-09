@@ -5,7 +5,7 @@
 // 编排事实源、模板时间戳记账与单资源读语义。断言依据：架构文档 §4.1 + 需求文档 §4.2.2/§4.7/§6
 // + src/host/storage/AGENTS.md。
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -107,13 +107,20 @@ describe('工作流 CRUD 与会话隔离', () => {
   })
 
   it('工作台全局化：listWorkflows 无 sessionId 返回全部会话实例（按 updatedAt 倒序）', async () => {
-    await store.saveWorkflow(makeFlow('f1', 's1'), 's1')
-    await store.saveWorkflow({ ...makeFlow('f2', 's2'), updatedAt: '2026-09-02T00:00:00.000Z' }, 's2')
-    const all = await store.listWorkflows()
-    expect(all.map((f) => f.id).sort()).toEqual(['f1', 'f2'])
-    expect(all.map((f) => f.sessionId).sort()).toEqual(['s1', 's2'])
-    // 首个 = updatedAt 最新（f2 显式更晚）
-    expect(all[0]?.id).toBe('f2')
+    // 保存会覆盖传入的 updatedAt；控制 Date 才能保证两次写入有不同时间。
+    vi.useFakeTimers({ toFake: ["Date"] })
+    try {
+      vi.setSystemTime(new Date("2026-09-01T00:00:00.000Z"))
+      await store.saveWorkflow(makeFlow('f1', 's1'), 's1')
+      vi.setSystemTime(new Date("2026-09-02T00:00:00.000Z"))
+      await store.saveWorkflow(makeFlow('f2', 's2'), 's2')
+      const all = await store.listWorkflows()
+      expect(all.map((f) => f.id).sort()).toEqual(['f1', 'f2'])
+      expect(all.map((f) => f.sessionId).sort()).toEqual(['s1', 's2'])
+      expect(all[0]?.id).toBe('f2')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('revision 自动递增', async () => {
