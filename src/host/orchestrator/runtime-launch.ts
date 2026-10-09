@@ -16,6 +16,7 @@ import type { StartRunOptions, StartRunResult, RunEntry } from './run-entry.js'
 import type { RunSnapshot } from '../shared/types.js'
 import type { WorkflowDocument } from '../shared/graph-model.js'
 import { RuntimeBase } from './runtime-base.js'
+import { prepareRunInputs } from './execution-inputs.js'
 
 /**
  * 本次运行「组织预算」末段文本（自主编排方案 §6.4；P2 正式接入）。
@@ -90,6 +91,8 @@ export class RuntimeLaunch extends RuntimeBase {
 
     const runId = this.deps.newRunId?.() ?? `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     const snapshot = createRunSnapshot({ runId, flow, sessionId: runSessionId, mode, now: this.now() })
+    snapshot.workingDirectory = await this.deps.workingDirectory?.(runSessionId)
+    await prepareRunInputs(flow, snapshot, input.fileBindings, this.deps.store.root)
     // 元参数三层之第三层（D-13）：把「有效值（模板 ← 实例覆盖）」冻结进快照。
     // 为什么在 startRun 冻结而非每次读取：运行期预算须可审计、可还原；此后改模板/实例
     // 的 meta 不影响本次运行（续跑继承旧冻结值，见 resume.ts 的 buildResumedSnapshot）。
@@ -229,6 +232,10 @@ export class RuntimeLaunch extends RuntimeBase {
 
     const runId = this.deps.newRunId?.() ?? `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     const snapshot = buildResumedSnapshot({ prev, runId, flow, sessionId, mode: prev.mode, now: this.now() })
+    snapshot.workingDirectory = await this.deps.workingDirectory?.(sessionId) ?? prev.workingDirectory
+    snapshot.fileBindings = prev.fileBindings ? structuredClone(prev.fileBindings) : undefined
+    snapshot.parentRoute = prev.parentRoute ? { ...prev.parentRoute } : undefined
+    await prepareRunInputs(flow, snapshot, input.fileBindings, this.deps.store.root)
     const entry: RunEntry = {
       controller: new AbortController(),
       snapshot,

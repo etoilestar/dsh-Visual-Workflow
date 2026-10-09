@@ -17,7 +17,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { readFile } from 'node:fs/promises'
-import { dbInEdges } from '../graph/index.js'
+import { dbInEdges, parseExecutionContract } from '../graph/index.js'
 import type { FlowStore } from '../storage/flow-store.js'
 import type { GraphNode, RoleNode } from '../shared/graph-model.js'
 import type { NodeRunner, NodeStartInput, OrchestratorLogger, GroupStartInput, GroupStartResult } from '../orchestrator/index.js'
@@ -62,7 +62,7 @@ export function nodeChildSignature(node: GraphNode, resolvedTools: string[], rol
 }
 
 /**
- * provider 首选序（spawn > fork > codex > claude-code > dsh-sdk > acp > 首个可用）。
+ * provider 首选序（spawn > codex > claude-code > dsh-sdk > acp > 首个可用）。
  *
  * 为什么要 spawn 优先（用户裁决 + 官方取证）：
  *   - 官方 `dsh-subagent-fork-in-process`：`inheritsParentContext = true`，其
@@ -72,13 +72,13 @@ export function nodeChildSignature(node: GraphNode, resolvedTools: string[], rol
  *   - 官方 `dsh-subagent-spawn-in-process`：`inheritsParentContext = false`，
  *     `prepareContinuable()` 返回 `{}` —— 子代理是全新会话、own system prompt、
  *     zero parent context。这正是「每个节点独立角色 / 独立上下文」工作流所需语义。
- *   - 若 spawn 未注册（极少数部署只挂 fork）则回退 fork，保证运行仍可用。
+ *   - 只有 fork 可用时拒绝启动，避免把父代理的整段历史注入节点。
  */
-const PROVIDER_PREFERENCE = ['spawn', 'fork', 'codex', 'claude-code', 'dsh-sdk', 'acp'] as const
+const PROVIDER_PREFERENCE = ['spawn', 'codex', 'claude-code', 'dsh-sdk', 'acp'] as const
 
 /** 从可用 provider 清单中挑选（首选序优先，否则清单第一个；无可选返回 null）。 */
 export function pickProviderName(available: string[]): string | null {
-  return PROVIDER_PREFERENCE.find((name) => available.includes(name)) ?? available[0] ?? null
+  return PROVIDER_PREFERENCE.find((name) => available.includes(name)) ?? available.find((name) => name !== 'fork') ?? null
 }
 
 /**
@@ -466,6 +466,10 @@ export async function resolveAgentTools(input: ResolveToolsInput): Promise<strin
   if (input.disabledTools && input.disabledTools.size > 0) {
     allow = allow.filter((name) => !input.disabledTools!.has(name))
   }
+  const execution = parseExecutionContract(input.node.data.execution)
+  if (execution.issue) throw new ChildToolPermissionError(execution.issue)
+  const missing = (execution.value?.requiredTools ?? []).filter((name) => !allow.includes(name))
+  if (missing.length) throw new ChildToolPermissionError(`节点缺少执行契约要求的工具：${missing.join(', ')}（请选择可用预设或工具组合）`)
   return allow
 }
 

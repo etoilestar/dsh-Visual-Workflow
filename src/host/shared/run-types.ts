@@ -65,6 +65,9 @@ export interface RunSnapshot {
   termination?: RunTermination
   parentErrors?: RunFailure[]
   parentRoute?: { provider?: string; model?: string }
+  /** 实际会话工作目录与本次运行的文件绑定；不改写模板的文件节点。 */
+  workingDirectory?: string
+  fileBindings?: Record<string, string[]>
   /**
    * 元参数冻结副本（D-13）：startRun 时把「有效元参数（模板 ← 实例覆盖）」的副本
    * 写入快照，供审计与后续评估/重组还原当时预算；续跑继承旧快照的冻结值（不重读）。
@@ -103,6 +106,7 @@ export interface RunSnapshot {
     model?: string
     failure?: RunFailure
     attemptHistory?: NodeAttempt[]
+    artifacts?: Array<{ path: string; size: number; verifiedAt: string }>
     /** 回合明细（可续跑节点每次被唤醒执行为一回合；P0-2）。 */
     turns?: Array<{
       /** 回合开始时间。 */

@@ -51,6 +51,11 @@ export interface RunReflectionFacts {
   durationMs: number | null
   /** 快照 nodes.length（运行快照内的全部节点数）。 */
   nodeCount: number
+  runSummary?: string
+  completedNodes?: string[]
+  failedNodes?: string[]
+  skippedNodes?: string[]
+  errorCodes?: string[]
   /** 系统语言名（沿用仓库既有 systemLanguage 口径，可为空串）。 */
   systemLanguage?: string
 }
@@ -94,7 +99,8 @@ function buildChineseReflection(facts: RunReflectionFacts): string {
     `- run 状态：${TERMINAL_STATUS_TEXT[facts.status]}`,
     `- 总耗时：${formatDuration(facts.durationMs, true)}`,
     `- 节点总数：${facts.nodeCount}`,
-    '以上三项是本次运行的全部机器事实；其余判断必须由你自己的推理给出。',
+    ...outcomeFacts(facts, true),
+    '以上内容是本次运行已采集的机器事实；未采集的信息不得补写为事实。',
     '',
     '【复盘步骤】',
     '1. 回顾任务上下文：用户真正要什么、有哪些硬约束、交付物是什么。',
@@ -107,7 +113,7 @@ function buildChineseReflection(facts: RunReflectionFacts): string {
     '8. 若这次运行没有足够价值可沉淀，允许返回 0 条经验。',
     '',
     '【事实与推理必须分开】',
-    '- Fact（机器事实）：只来自上面列出的三项，以及运行记录中可核对的产出与状态。',
+    '- Fact（机器事实）：只来自上面的机器事实，以及运行记录中可核对的产出与状态；无完成节点时不得称业务节点已顺利执行。',
     '- Inference（推理）：你对因果的解释、对策略好坏的判断，必须标明为推理。',
     '- 禁止此类归因：因为「采用了方案 A」且「任务最终成功」，就断言「A 是好策略」；同理，失败也不能直接归罪于某个决定。',
     '- 只有当推理能说明因果机制（为什么有效、在什么条件下有效）时，才把它写成经验。',
@@ -119,10 +125,10 @@ function buildChineseReflection(facts: RunReflectionFacts): string {
     '- 不确定、证据不足时宁可不产生；允许 0 条。',
     '',
     '【收尾动作】',
-    `复盘结束后，把候选经验（0~${REFLECTION_MAX_EXPERIENCES} 条）交给工具 ${REFLECTION_TOOL_NAME} 提交：该工具会把候选渲染成多选卡片，由用户确认后入库；你这一步不要自行判优、不要跳过用户确认。`,
+    `有 ${1}~${REFLECTION_MAX_EXPERIENCES} 条候选经验时，调用工具 ${REFLECTION_TOOL_NAME}：它将候选渲染成多选卡片，由用户确认后入库；不要跳过用户确认，用户不选择任何条目时不入库。`,
     `工具入参：experiences 为数组，每条含 task_type / task_context / insight（必填）与 evidence? / source_run_id?（可选，本次运行可填 runId=${facts.runId}）。`,
     '其中 task_type 是粗粒度任务类型（如「软件开发」「数据分析」），task_context 是可用于语义检索的自然语言上下文，不是标题。',
-    '没有值得沉淀的经验时，提交空数组也是正确结果。',
+    `没有值得沉淀的经验时直接结束复盘，不调用 ${REFLECTION_TOOL_NAME}，不提交空数组。`,
   ]
   const rule = reflectionLanguageRule(facts.systemLanguage)
   lines.push('', rule)
@@ -141,7 +147,8 @@ function buildEnglishReflection(facts: RunReflectionFacts): string {
     `- run status: ${TERMINAL_STATUS_TEXT_EN[facts.status]}`,
     `- total duration: ${formatDuration(facts.durationMs, false)}`,
     `- node count: ${facts.nodeCount}`,
-    'These three items are the complete set of machine facts for this run; every other judgement must come from your own reasoning.',
+    ...outcomeFacts(facts, false),
+    'These are the collected machine facts; do not invent facts for uncollected information.',
     '',
     '[Reflection steps]',
     '1. Recall the task context: what the user actually needed, the hard constraints, the deliverable.',
@@ -154,7 +161,7 @@ function buildEnglishReflection(facts: RunReflectionFacts): string {
     '8. If this run has nothing worth keeping, returning 0 experiences is allowed.',
     '',
     '[Separate Fact from Inference]',
-    '- Fact: only the three machine facts above plus verifiable outputs and node statuses in the run record.',
+    '- Fact: the machine facts above plus verifiable outputs and node statuses in the run record; zero completed nodes cannot be described as successful business execution.',
     '- Inference: your causal explanations and judgements about strategy quality; label them as inference.',
     '- Forbidden attribution: "we chose approach A and the task succeeded, therefore A is a good strategy" (and symmetrically, blaming one decision for a failure).',
     '- Only write an experience when the inference explains the causal mechanism (why it worked, under which conditions).',
@@ -166,14 +173,25 @@ function buildEnglishReflection(facts: RunReflectionFacts): string {
     '- When uncertain or under-evidenced, prefer producing nothing; 0 experiences is allowed.',
     '',
     '[Closing action]',
-    `Submit the candidate experiences (0 to ${REFLECTION_MAX_EXPERIENCES}) with the tool ${REFLECTION_TOOL_NAME}: it renders them as a multi-select card for the user to confirm before they are stored. Do not pre-judge quality yourself and do not skip user confirmation.`,
+    `For 1 to ${REFLECTION_MAX_EXPERIENCES} candidates, call ${REFLECTION_TOOL_NAME}: it renders a multi-select card for user confirmation before storage. Store nothing when the user selects none; do not skip confirmation.`,
     `Tool arguments: experiences is an array; each entry requires task_type / task_context / insight and accepts optional evidence and source_run_id (use runId=${facts.runId} for this run).`,
     'task_type is a coarse task category (e.g. "software development"); task_context is natural-language context used for semantic retrieval, not a title.',
-    'Submitting an empty array is a correct outcome when nothing is worth keeping.',
+    `When no experience is worth keeping, finish reflection without calling ${REFLECTION_TOOL_NAME}; do not submit an empty array.`,
   ]
   const rule = reflectionLanguageRule(facts.systemLanguage)
   lines.push('', rule)
   return lines.join('\n')
+}
+
+function outcomeFacts(facts: RunReflectionFacts, chinese: boolean): string[] {
+  const fields = [
+    [chinese ? '运行摘要' : 'run summary', facts.runSummary],
+    [chinese ? '完成节点' : 'completed nodes', facts.completedNodes],
+    [chinese ? '失败节点' : 'failed nodes', facts.failedNodes],
+    [chinese ? '跳过节点' : 'skipped nodes', facts.skippedNodes],
+    [chinese ? '错误码' : 'error codes', facts.errorCodes],
+  ] as const
+  return fields.map(([label, value]) => `- ${label}：${value === undefined ? (chinese ? '未采集' : 'not collected') : JSON.stringify(value)}`)
 }
 
 /**

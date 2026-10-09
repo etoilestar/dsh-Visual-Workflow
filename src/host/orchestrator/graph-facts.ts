@@ -149,6 +149,8 @@ export function buildNodeContextFacts(input: {
           content: truncateText(src.data.content, input.documentTextLimit),
         })
       } else {
+        const bound = input.snapshot.fileBindings?.[src.id]
+        if (bound) { filePaths.push(...bound.filter((path) => !filePaths.includes(path))); continue }
         // 受管文件路径索引（需求 §4.2.4.1：文本直通，非文本文件注入路径索引）：
         // 单选 managedPath 与多选 files 列表都要注入——多选配置下 managedPath 通常
         // 为空、路径存在 files 数组中，只认单字段会导致下游收不到任何文件索引（Bug 21）。
@@ -184,7 +186,7 @@ export function buildNodeContextFacts(input: {
     const resolved = src.kind === 'proxy' ? nodeById(flow, src.proxySourceId) : src
     if (!resolved || (resolved.kind !== 'agent' && resolved.kind !== 'parent')) continue
     const entry = input.snapshot.nodes.find((n) => n.nodeId === resolved.id)
-    if (!entry || (entry.status !== 'ok' && entry.status !== 'react-capped')) continue
+    if (!entry || (entry.status !== 'ok' && entry.status !== 'react-capped' && entry.status !== 'armed')) continue
     const output = String(entry.output ?? '').trim()
     if (!output) continue
     upstreamContext.push({

@@ -217,20 +217,21 @@ describe('childKey / nodeChildSignature / pickProviderName', () => {
     expect(nodeChildSignature(base, ['read'], '')).not.toBe(signature)
   })
 
-  it('pickProviderName：首选序 spawn>fork>codex>claude-code>dsh-sdk>acp；无首选回退首个；空清单 null', () => {
+  it('pickProviderName：首选序 spawn>codex>claude-code>dsh-sdk>acp；无首选回退首个；空清单 null', () => {
     expect(pickProviderName(['acp', 'spawn', 'fork'])).toBe('spawn')
     expect(pickProviderName(['acp', 'codex'])).toBe('codex')
     expect(pickProviderName(['unknown-only'])).toBe('unknown-only')
     expect(pickProviderName([])).toBeNull()
   })
 
-  it('spawn 优先越权隔离回归：节点子代理不继承父编排上下文；仅 spawn 缺失时回退 fork', () => {
+  it('spawn 优先越权隔离回归：节点子代理不继承父编排上下文；仅 fork 可用时拒绝创建', () => {
     // 官方：fork.inheritsParentContext=true（completedTurnPrefix 父会话种子）；spawn.inheritsParentContext=false（零父上下文）。
     // 工作流节点必须走 spawn（own session / own system prompt / zero parent context），否则父代理对话/提示词整段泄露给子节点。
     expect(pickProviderName(['fork', 'spawn'])).toBe('spawn')
     expect(pickProviderName(['spawn'])).toBe('spawn')
     // 仅 fork 可用（spawn 未注册）时仍可回退，保证运行可用而非崩溃
-    expect(pickProviderName(['fork', 'acp'])).toBe('fork')
+    expect(pickProviderName(['fork', 'acp'])).toBe('acp')
+    expect(pickProviderName(['fork'])).toBeNull()
   })
 })
 
@@ -308,6 +309,15 @@ describe('resolveAgentTools 白名单解析（§4.2 L219）', () => {
       store: h.store, toolsView: h.toolsView, sessionId: 'session-1', flowId: 'flow-1',
       node: agentNode('n-a1', { presetId: 'unknown-preset' }),
     })).rejects.toMatchObject({ code: 'WF_CHILD_TOOL_POLICY_FAILED' })
+  })
+
+  it('执行契约要求的 read 不会被空 preset 或全局禁用静默剔除', async () => {
+    const h = await makeHarness()
+    const node = agentNode('n-a1', { presetId: null, execution: { requiredTools: ['read'] } })
+    await expect(resolveAgentTools({ store: h.store, toolsView: h.toolsView, sessionId: 'session-1', flowId: 'flow-1', node })).rejects.toMatchObject({ code: 'WF_CHILD_TOOL_POLICY_FAILED' })
+    h.toolsView.presets.set('standard', ['read'])
+    node.data.presetId = 'standard'
+    await expect(resolveAgentTools({ store: h.store, toolsView: h.toolsView, sessionId: 'session-1', flowId: 'flow-1', node, disabledTools: new Set(['read']) })).rejects.toThrow('read')
   })
 
   it('combo 不存在 → 明确报错', async () => {
@@ -565,11 +575,11 @@ describe('NodeAgentRunner 创建/复用/派发', () => {
 
 describe("childVisibilityContribution", () => {
   it("test_parent_tools_guarded_even_when_registry_mask_cannot_hide_own_tools", () => {
-    const denied: Array<(exec: { call: { name: string } }) => string | undefined> = []
-    const tools = { get: () => ({}), restrict: () => () => {}, guard: (check: (exec: { call: { name: string } }) => string | undefined) => { denied.push(check); return () => {} } }
+    const denied: Array<(exec: { name: string }) => string | undefined> = []
+    const tools = { get: () => ({}), restrict: () => () => {}, guard: (check: (exec: { name: string }) => string | undefined) => { denied.push(check); return () => {} } }
     childVisibilityContribution()({ get: () => tools })
-    for (const name of CHILD_AGENT_HIDDEN_TOOLS) expect(denied[0]({ call: { name } })).toContain("WF_NOT_ROOT")
-    expect(denied[0]({ call: { name: "read" } })).toBeUndefined()
+    for (const name of CHILD_AGENT_HIDDEN_TOOLS) expect(denied[0]({ name })).toContain("WF_NOT_ROOT")
+    expect(denied[0]({ name: "read" })).toBeUndefined()
   })
   it("test_permission_service_missing_rejects_creation", () => {
     expect(() => childVisibilityContribution()({ get: () => undefined })).toThrow("无法安全启动")
@@ -650,13 +660,13 @@ describe('DSH 0.1.2 子代理 seam（getProvider 探测 / childSetup 安装 / se
     const rc1 = new Rc1FakeSubagents()
     expect(detectSubagentProvider(rc1)).toBe('spawn') // spawn 注册 → 首选
     delete rc1.providers.spawn
-    expect(detectSubagentProvider(rc1)).toBe('fork')
+    expect(detectSubagentProvider(rc1)).toBe('acp')
     rc1.providers = {}
     expect(detectSubagentProvider(rc1)).toBeNull()
     // 旧面 fake（仅 list）回退 list() 清单
     const legacy = new FakeSubagents()
     legacy.providers = ['acp', 'fork']
-    expect(detectSubagentProvider(legacy)).toBe('fork')
+    expect(detectSubagentProvider(legacy)).toBe('acp')
   })
 
   it('创建：startContinuable(provider=spawn)（getProvider 探测）返回 created=true；装配由 host 的 agent/created 负责', async () => {

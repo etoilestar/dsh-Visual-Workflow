@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest"
 import { createChildToolFilterSetup, installChildToolPolicy } from "../../../src/host/agent/child-tool-filter.js"
 
 function scope(inherited = ["read", "write", "mcp__server__read"], own = ["send_message", "custom"]) {
-  const guards: Array<(execution: { call: { name: string } }) => string | undefined> = []
+  const guards: Array<(execution: { name: string }) => string | undefined> = []
   const masks: Array<{ allow?: string[]; deny?: string[] }> = []
   const tools = {
     get: (name: string) => inherited.includes(name) || own.includes(name) ? {} : undefined,
-    guard: (check: (execution: { call: { name: string } }) => string | undefined) => {
+    guard: (check: (execution: { name: string }) => string | undefined) => {
       guards.push(check)
       return () => { guards.splice(guards.indexOf(check), 1) }
     },
@@ -17,7 +17,7 @@ function scope(inherited = ["read", "write", "mcp__server__read"], own = ["send_
       return () => { masks.splice(masks.indexOf(filter), 1) }
     },
   }
-  return { tools, context: { get: () => tools }, masks, denied: (name: string) => guards.some((check) => check({ call: { name } }) !== undefined) }
+  return { tools, context: { get: () => tools }, masks, denied: (name: string) => guards.some((check) => check({ name }) !== undefined) }
 }
 
 describe("child scope permissions", () => {

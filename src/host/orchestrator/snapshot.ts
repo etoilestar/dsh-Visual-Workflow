@@ -249,7 +249,7 @@ export function failureOf(error: unknown, phase: RunFailure["phase"], code: stri
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@")
     .replace(/(https?:\/\/[^\s?]+)\?[^\s]+/gi, "$1?[redacted]")
   return {
-    phase: value?.phase === "tool_policy" ? "tool_policy" : phase,
+    phase: typeof value?.phase === 'string' && ['tool_policy', 'node_input', 'child_start', 'child_execute', 'parent_execute', 'run_finish'].includes(value.phase) ? value.phase as RunFailure['phase'] : phase,
     code: typeof value?.code === "string" ? value.code : code,
     message: truncateText(safe, 2000),
     retryable: value?.retryable === true,

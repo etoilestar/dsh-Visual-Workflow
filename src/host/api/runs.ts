@@ -21,15 +21,15 @@ export class RunEndpoints extends VisualWorkflowApiBase {
    * （run.sessionId === instance.sessionId，不再支持运行期新建会话——「开启新会话」
    * 只是创建实例时的一次性动作，见 createSession 端点）。
    */
-  async run(args: { sessionId?: unknown; flowId?: unknown }): Promise<unknown> {
+  async run(args: { sessionId?: unknown; flowId?: unknown; fileBindings?: unknown }): Promise<unknown> {
     const sessionId = String(args?.sessionId ?? '')
     const flowId = String(args?.flowId ?? '')
     if (!sessionId || !flowId) throw httpError(400, 'requires sessionId and flowId')
     const prev = await findResumableRun(this.host.store, { sessionId, flowId })
     if (prev) {
-      return this.host.orchestrator.resumeRun({ sessionId, flowId, fromRunId: prev.id })
+      return this.host.orchestrator.resumeRun({ sessionId, flowId, fromRunId: prev.id, ...(args.fileBindings === undefined ? {} : { fileBindings: args.fileBindings }) })
     }
-    return this.host.orchestrator.startRun({ sessionId, flowId })
+    return this.host.orchestrator.startRun({ sessionId, flowId, ...(args.fileBindings === undefined ? {} : { fileBindings: args.fileBindings }) })
   }
 
   /** 运行状态轮询：内存快照优先，终态（内存已释放）回退磁盘历史。会话归属校验。 */
@@ -87,7 +87,7 @@ export class RunEndpoints extends VisualWorkflowApiBase {
   }
 
   /** 断点续跑（历史面板「恢复」入口；runId 缺省取该工作流最近可恢复记录）。 */
-  async runResume(args: { sessionId?: unknown; flowId?: unknown; runId?: unknown }): Promise<unknown> {
+  async runResume(args: { sessionId?: unknown; flowId?: unknown; runId?: unknown; fileBindings?: unknown }): Promise<unknown> {
     const sessionId = String(args?.sessionId ?? '')
     const flowId = String(args?.flowId ?? '')
     if (!sessionId || !flowId) throw httpError(400, 'requires sessionId and flowId')
@@ -95,6 +95,7 @@ export class RunEndpoints extends VisualWorkflowApiBase {
       sessionId,
       flowId,
       ...(args?.runId ? { fromRunId: String(args.runId) } : {}),
+      ...(args.fileBindings === undefined ? {} : { fileBindings: args.fileBindings }),
     })
     return result
   }

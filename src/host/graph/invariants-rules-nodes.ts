@@ -11,6 +11,7 @@ import type { FlowDag } from './dag.js'
 import type { CheckGraphInput, GraphIssue } from './invariants-types.js'
 import type { DatabaseNode, FileNode, GraphNode, Line } from '../shared/graph-model.js'
 import { proxyRoleOf } from './model.js'
+import { parseExecutionContract } from './execution-contract.js'
 
 /** 按 id 建索引（保持输入顺序）。 */
 function nodeMapOf(flow: CheckGraphInput['flow']): Map<string, GraphNode> {
@@ -120,11 +121,11 @@ export function ruleDataNodeComplete({ flow }: CheckGraphInput): GraphIssue[] {
       const hasFiles = Array.isArray(file.data?.files) && file.data.files.length > 0
       if (!hasManaged && !hasFiles) {
         issues.push({
-          code: 'dataNodeIncomplete',
-          level: 'error',
+          code: 'fileInputUnbound',
+          level: 'warning',
           message: `文件节点「${file.data?.label || file.id}」未选择任何文件`,
           nodeIds: [file.id],
-          suggestion: '为该文件节点选择至少一个文件（或把类型改回文本并填写内容）',
+          suggestion: '运行前为该文件节点选择实际文件，或通过 fileBindings 提供路径；规划期可暂留占位节点',
         })
       }
     }
@@ -226,11 +227,11 @@ export function ruleNodeDataFlowContract({ flow }: CheckGraphInput): GraphIssue[
       const predecessors = new Set(lines
         .filter((line) => line.target === node.id && line.targetHandle === 'flow-in' && isUnitNode(byId.get(line.source)))
         .map((line) => line.source))
-      if (predecessors.size >= 2) {
+      if (predecessors.size >= 2 || !!String(node.data.inputSchema ?? '').trim() || node.data.execution?.inputSource === 'ctx') {
         issues.push({
           code: 'nodeNoUpstream',
           level: 'warning',
-          message: `可执行节点「${label}」有多个可执行前置节点，但没有任何输入通道（无 ctx / file / db 入线）`,
+          message: `可执行节点「${label}」声明需要输入或有多个前置节点，但没有输入通道（无 ctx / file / db 入线）`,
           nodeIds: [node.id],
           suggestion: '若它需要使用上游产出或受管文件，请连一条 ctx 线（上游 sourceHandle=ctx-out → 本节点 targetHandle=ctx-in）或从文件/数据库节点连入；若它确实自给自足，可忽略本条',
         })
@@ -259,6 +260,8 @@ export function ruleRoleNodeConfigured({ flow }: CheckGraphInput): GraphIssue[] 
     const data = node.data as { label?: unknown; presetId?: unknown; systemPrompt?: unknown }
     const label = data.label ?? node.id
     const presetId = String(data.presetId ?? '').trim()
+    const execution = parseExecutionContract(node.data.execution)
+    if (execution.issue) issues.push({ code: 'executionContractInvalid', level: 'error', message: `节点「${label}」：${execution.issue}`, nodeIds: [node.id], suggestion: 'execution.inputSource 使用 ctx/workspace/runtime；requiredFiles/requiredTools/outputFiles 使用非空字符串数组' })
     if (!presetId) {
       issues.push({
         code: 'roleNodeNoPreset',

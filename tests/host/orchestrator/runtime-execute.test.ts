@@ -3,6 +3,8 @@
 // 节点执行层单测（wf_run_node/wf_finish）：异步启动、护栏、任务块注入、暂停门、wait 阻塞、收尾幂等。
 // 装配与测试替身见 fixtures/harness.ts（共享，不在本文件内重复）。
 
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GLOBAL_RUN_CALL_LIMIT, OUTPUT_SUMMARY_LIMIT } from '../../../src/host/orchestrator/index.js'
 import { HEAD_MARKER, MID_MARKER, TAIL_MARKER } from '../../../src/host/prompts/index.js'
@@ -47,6 +49,8 @@ describe('wfRunNode 异步路径与护栏', () => {
     const h = await makeHarness()
     const flow = makeFlow()
     flow.nodes.splice(1, 0, fileNode('n-file-text', '文档A', { fileKind: 'text', content: '长'.repeat(300) }))
+    await mkdir(join(h.dir, 'data/files'), { recursive: true })
+    await writeFile(join(h.dir, 'data/files/b.pdf'), 'fixture contents')
     flow.nodes.splice(1, 0, fileNode('n-file-managed', '受管B', { fileKind: 'file', managedPath: 'data/files/b.pdf' }))
     flow.lines.push(
       { id: 'l-ctx-1', source: 'n-file-text', target: 'n-a1', sourceHandle: 'ctx-out', targetHandle: 'ctx-in' },
@@ -63,6 +67,9 @@ describe('wfRunNode 异步路径与护栏', () => {
   it('文档 ctx-in 多选 files：全部受管路径注入任务块（不因 managedPath 为空而丢失，§4.2.4.1）', async () => {
     const h = await makeHarness()
     const flow = makeFlow()
+    await mkdir(join(h.dir, 'data/files'), { recursive: true })
+    await writeFile(join(h.dir, 'data/files/a.pdf'), 'first fixture')
+    await writeFile(join(h.dir, 'data/files/b.pdf'), 'second fixture')
     flow.nodes.splice(1, 0, fileNode('n-file-multi', '多选文档', {
       fileKind: 'file',
       files: [

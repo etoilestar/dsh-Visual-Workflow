@@ -18,6 +18,7 @@ import { failureOf, setNodeStatus, statusText, terminalizeNodes } from './snapsh
 import { GLOBAL_RUN_CALL_LIMIT, type CallerInfo, type GroupMemberPlan, type GroupStartResult } from './seams.js'
 import { RuntimeLaunch } from './runtime-launch.js'
 import type { GroupNode, WorkflowDocument } from '../shared/graph-model.js'
+import { preflightNodeInputs } from './execution-inputs.js'
 
 export class RuntimeExecute extends RuntimeLaunch {
   // ---- wf_run_node ----------------------------------------------------------
@@ -144,13 +145,7 @@ export class RuntimeExecute extends RuntimeLaunch {
     setNodeStatus(run.snapshot, resolvedNodeId, 'running', { attempts: attempt, now: this.now(), provider: node.data.provider || run.snapshot.parentRoute?.provider, model: node.data.model || run.snapshot.parentRoute?.model })
     this.log().info(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, attempt, phase: "child_start", status: "requested", provider: node.data.provider, model: node.data.model }))
     await this.persistWarn(run)
-    const blocks = buildNodeBlocks({
-      flow,
-      node,
-      snapshot: run.snapshot,
-      documentTextLimit: this.deps.config.documentTextLimit,
-      systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
-    })
+
 
     // wait:true 阻塞等待器必须先于启动注册（subagent/end 可能在启动返回前到达）
     const waitRequested = args?.wait === true
@@ -165,6 +160,14 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
 
     try {
+      await preflightNodeInputs(flow, node, run.snapshot, this.deps.store.root)
+      const blocks = buildNodeBlocks({
+      flow,
+      node,
+      snapshot: run.snapshot,
+      documentTextLimit: this.deps.config.documentTextLimit,
+      systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
+    })
       const { childId, replacedChildId } = await this.deps.runner.startNodeTask({
         sessionId: run.snapshot.sessionId,
         flowId: run.snapshot.flowId,
@@ -318,6 +321,7 @@ export class RuntimeExecute extends RuntimeLaunch {
       const member = plans.find((plan) => plan.node.id === nodeId)?.node
       setNodeStatus(run.snapshot, nodeId, 'running', { attempts: count, now: this.now(), provider: member?.data.provider || run.snapshot.parentRoute?.provider, model: member?.data.model || run.snapshot.parentRoute?.model })
       await this.persistWarn(run)
+      if (member) await preflightNodeInputs(flow, member, run.snapshot, this.deps.store.root)
     }
     const onMemberStarted = async (member: GroupStartResult['members'][number]): Promise<void> => {
       await onMemberStarting(member.nodeId)

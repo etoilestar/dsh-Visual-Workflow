@@ -158,8 +158,8 @@ describe('VisualWorkflowHost 装配', () => {
       },
       get(name: string): unknown {
         return name === 'tools'
-          ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { call: { name: string } }) => string | undefined) => {
-              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ call: { name } }) !== undefined) })
+          ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { name: string }) => string | undefined) => {
+              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ name }) !== undefined) })
               return () => {}
             } }
           : undefined
@@ -207,8 +207,8 @@ describe('VisualWorkflowHost 装配', () => {
         systemPrompt: { section(input: { name: string; order: number }): () => void { sections.push(input); return () => {} } },
         get(name: string): unknown {
           return name === 'tools'
-            ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { call: { name: string } }) => string | undefined) => {
-              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ call: { name } }) !== undefined) })
+            ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { name: string }) => string | undefined) => {
+              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ name }) !== undefined) })
               return () => {}
             } }
             : undefined
@@ -263,8 +263,8 @@ describe('VisualWorkflowHost 装配', () => {
         systemPrompt: { section(input: { name: string; order: number }): () => void { sections.push(input); return () => {} } },
         get(name: string): unknown {
           return name === 'tools'
-            ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { call: { name: string } }) => string | undefined) => {
-              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ call: { name } }) !== undefined) })
+            ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { name: string }) => string | undefined) => {
+              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ name }) !== undefined) })
               return () => {}
             } }
             : undefined

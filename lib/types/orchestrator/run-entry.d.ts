@@ -95,6 +95,8 @@ export interface OrchestratorDeps {
      * 为什么经缝注入：读角色 Prompt 文件属 agent 关注点，编排器只做「注入到根 Agent ctx」。
      */
     resolveRolePrompt?: (node: RoleNode) => Promise<string>;
+    /** 从官方会话 header 读取实际 cwd；不以插件进程 cwd 猜测用户工作区。 */
+    workingDirectory?: (sessionId: string) => Promise<string | undefined>;
     /** 配置子集。 */
     config: OrchestratorConfig;
     /**
@@ -138,6 +140,8 @@ export interface MilestoneMarkResult {
     milestoneUsed: number;
 }
 export interface StartRunOptions {
+    /** 文件节点 id → 实际输入路径数组；由运行边界校验未知 JSON。 */
+    fileBindings?: unknown;
     /** 运行模式（缺省 mode1；模式二由服务管理器传入 mode2）。 */
     mode?: 'mode1' | 'mode2';
     /** 模式二：本次外部请求的用户问题（注入输入节点产出 + 编排指令动态段）。 */

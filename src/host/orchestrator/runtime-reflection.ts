@@ -18,6 +18,8 @@ import { buildReflectionPrompt } from '../prompts/index.js'
 import { coordinatorMessage } from './ask-protocol.js'
 import { messageOf } from './errors.js'
 import type { OrchestratorLogger, RootAgentLike, RootInjectedMessage } from './seams.js'
+import type { RunSnapshot } from '../shared/types.js'
+import { failureOf } from './snapshot.js'
 
 /** 注入文案的稳定来源标记（排障与审计用；注入文本内的锚点见 REFLECTION_MARKER）。 */
 export const REFLECTION_MESSAGE_SOURCE = 'visual-workflow-reflection'
@@ -36,6 +38,9 @@ export interface RunReflectionFactsInput {
   endedAt: string | null
   /** 快照节点数。 */
   nodeCount: number
+  summary?: string
+  nodes?: RunSnapshot['nodes']
+  errorCodes?: string[]
   /** 系统语言名（可为空串 → 提示词按中文措辞）。 */
   systemLanguage?: string
 }
@@ -58,6 +63,11 @@ export function reflectionFactsOf(input: RunReflectionFactsInput): RunReflection
     durationMs,
     nodeCount: Math.max(0, Math.floor(Number(input.nodeCount) || 0)),
     systemLanguage: input.systemLanguage ?? '',
+    runSummary: input.summary === undefined ? undefined : failureOf({ message: input.summary }, 'run_finish', 'WF_REFLECTION', 0).message,
+    completedNodes: input.nodes?.filter((node) => node.status === 'ok' || node.status === 'react-capped').map((node) => node.nodeId),
+    failedNodes: input.nodes?.filter((node) => node.status === 'fail').map((node) => node.nodeId),
+    skippedNodes: input.nodes?.filter((node) => node.status === 'skipped').map((node) => node.nodeId),
+    errorCodes: input.nodes === undefined && input.errorCodes === undefined ? undefined : [...new Set([...(input.errorCodes ?? []), ...(input.nodes ?? []).flatMap((node) => node.failure ? [node.failure.code] : [])])],
   }
 }
 

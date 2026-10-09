@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { CHILD_AGENT_HIDDEN_TOOLS, RESERVED_TRANSPORT_TOOL, TEAM_TOOL_NAMES } from "../shared/protocol.js"
 
 interface ToolExecution {
-  call: { name: string }
+  name: string
 }
 
 interface ScopedTools {
@@ -41,9 +41,10 @@ export function installChildToolPolicy(raw: unknown, allow: readonly string[] | 
   const hidden: readonly string[] = CHILD_AGENT_HIDDEN_TOOLS
   const infrastructure: readonly string[] = [RESERVED_TRANSPORT_TOOL, ...TEAM_TOOL_NAMES]
   // 守卫先于任何权限探测安装；验证失败时仍拒绝未授权调用，创建监听器向官方传播错误。
-  const disposeGuard = tools.guard(({ call }) => {
-    if (hidden.includes(call.name)) return "WF_NOT_ROOT: 父代理专属工具禁止子代理调用"
-    if (approved !== undefined && !approved.has(call.name) && !infrastructure.includes(call.name)) {
+  const disposeGuard = tools.guard(({ name }) => {
+    if (typeof name !== 'string') return 'WF_CHILD_TOOL_DENIED: 无法识别工具执行名称'
+    if (hidden.includes(name)) return "WF_NOT_ROOT: 父代理专属工具禁止子代理调用"
+    if (approved !== undefined && !approved.has(name) && !infrastructure.includes(name)) {
       return "WF_CHILD_TOOL_DENIED: 工具未获该节点授权"
     }
     return undefined
