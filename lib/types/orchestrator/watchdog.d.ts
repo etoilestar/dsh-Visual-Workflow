@@ -10,7 +10,7 @@ export declare function scheduleIdleWatchdog(runtime: OrchestratorRuntime, optio
     intervalMs?: number;
 }): () => void;
 /**
- * 单次看护扫描（抽出便于测试）：空闲超时停（无 inflight 才计）+ 父代理回合出错自动 failed。
+ * 单次看护扫描：父错误、执行时限、父/子活动与真正空闲分开处理。
  */
 export declare function sweepWatchdogOnce(runtime: OrchestratorRuntime): Promise<void>;
 /**

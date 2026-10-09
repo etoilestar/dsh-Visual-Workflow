@@ -5,7 +5,7 @@ function scope(inherited = ["read", "write", "mcp__server__read"], own = ["send_
   const guards: Array<(execution: { name: string }) => string | undefined> = []
   const masks: Array<{ allow?: string[]; deny?: string[] }> = []
   const tools = {
-    get: (name: string) => inherited.includes(name) || own.includes(name) ? {} : undefined,
+    get: (name: string) => own.includes(name) || (inherited.includes(name) && masks.every((mask) => (mask.allow === undefined || mask.allow.includes(name)) && !mask.deny?.includes(name))) ? {} : undefined,
     guard: (check: (execution: { name: string }) => string | undefined) => {
       guards.push(check)
       return () => { guards.splice(guards.indexOf(check), 1) }
@@ -17,7 +17,7 @@ function scope(inherited = ["read", "write", "mcp__server__read"], own = ["send_
       return () => { masks.splice(masks.indexOf(filter), 1) }
     },
   }
-  return { tools, context: { get: () => tools }, masks, denied: (name: string) => guards.some((check) => check({ name }) !== undefined) }
+  return { tools, context: { get: () => tools }, masks, guards, denied: (name: string) => guards.some((check) => check({ name }) !== undefined) }
 }
 
 describe("child scope permissions", () => {
@@ -52,23 +52,36 @@ describe("child scope permissions", () => {
     expect(child.denied("wf_finish")).toBe(true)
   })
 
-  it("test_install_failure_does_not_widen_permissions", () => {
+  it("test_install_failure_aborts_creation_and_releases_contributions", async () => {
     const child = scope()
     const restrict = child.tools.restrict
     child.tools.restrict = (filter) => {
       if (filter.allow !== undefined) throw new Error("policy installation failed")
       return restrict(filter)
     }
-    expect(() => installChildToolPolicy(child.context, ["read"])).toThrow("白名单安装失败")
-    expect(child.denied("write")).toBe(true)
-    expect(child.denied("wf_finish")).toBe(true)
+    let dispatched = false
+    await expect((async () => { installChildToolPolicy(child.context, ["read"]); dispatched = true })()).rejects.toThrow("白名单安装失败")
+    expect(dispatched).toBe(false)
+    expect(child.guards).toHaveLength(0)
+    expect(child.masks).toHaveLength(0)
   })
 
   it("test_missing_tool_or_guard_fails_before_inference", () => {
     const child = scope()
     expect(() => installChildToolPolicy(child.context, ["ghost"])).toThrow("实际子代理作用域不可用")
     expect(() => installChildToolPolicy({ get: () => ({ restrict: () => () => {} }) }, [])).toThrow("无法安全启动")
-    expect(child.denied("write")).toBe(true)
+    expect(child.guards).toHaveLength(0)
+  })
+
+  it("test_disposal_is_idempotent_and_own_tools_do_not_require_error_probes", () => {
+    const child = scope()
+    const dispose = installChildToolPolicy(child.context, ["custom", "read"])
+    expect(child.guards).toHaveLength(1)
+    expect(child.masks).toEqual([{ allow: ["read"] }])
+    dispose()
+    dispose()
+    expect(child.guards).toHaveLength(0)
+    expect(child.masks).toHaveLength(0)
   })
 
   it("test_empty_policy_survives_cold_restore_and_disposal", () => {

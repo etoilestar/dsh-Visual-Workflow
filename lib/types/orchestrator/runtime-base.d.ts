@@ -96,6 +96,8 @@ export declare abstract class RuntimeBase {
     milestoneUsedForSession(sessionId: string): number;
     /** 空闲看护门限（watchdog.ts 引用）。 */
     get idleTimeoutMs(): number;
+    get executionTimeoutMs(): number;
+    parentRunning(entry: RunEntry): boolean;
     /** 子代理是否仍在运行（watchdog.ts 引用；经 AgentHost）。 */
     childRunning(childId: string): boolean;
     /** 父代理回合终态检测（watchdog.ts 引用）。 */

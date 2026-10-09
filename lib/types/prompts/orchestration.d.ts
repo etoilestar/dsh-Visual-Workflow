@@ -88,6 +88,8 @@ export declare const ORCH_HARD_CONSTRAINTS: {
     /** 情况2 执行者模式核心短语：你本人也是执行节点，先执行自身任务再调度。 */
     readonly executorRole: "执行+编排：你既是执行节点，也要负责调度子代理；你只执行指向自身的节点任务";
 };
+/** 续跑仅注入当前调度事实；图、角色与历史产出继续从稳定引用读取。 */
+export declare function buildResumeOrchestrationPrompt(params: OrchestrationDirectiveParams): string;
 /**
  * 情况1（纯编排）父代理提示词构建器（纯函数）。
  * 首段仅编排身份 + 完成判定信号 + 调度协议；不包含执行者模式条目。

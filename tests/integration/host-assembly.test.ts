@@ -304,6 +304,42 @@ describe('VisualWorkflowHost 装配', () => {
 
     await root.fiber.dispose()
   })
+  it("test_one_policy_per_scope_republication_disposal_and_append_failure_cleanup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vw-host-"))
+    cleanups.push(() => rm(dir, { recursive: true, force: true }))
+    const root = new Context()
+    await root.plugin(VisualWorkflowHost, makeConfig(dir))
+    const host = root.get(VisualWorkflowHostServiceName) as unknown as {
+      childPrompt: { withPending(s: unknown, o: () => Promise<void>): Promise<void> }
+      childToolFilter: { withPending(s: string[], o: () => Promise<void>): Promise<void> }
+      onAgentCreated(p: unknown): Promise<void>
+      onAgentDisposed(p: unknown): void
+    }
+    const guards: unknown[] = []
+    const masks: unknown[] = []
+    const childCtx = { get: () => ({ get: () => undefined,
+      guard: (guard: unknown) => { guards.push(guard); return () => { guards.splice(guards.indexOf(guard), 1) } },
+      restrict: (mask: unknown) => { masks.push(mask); return () => { masks.splice(masks.indexOf(mask), 1) } },
+    }) }
+    const agent = { id: "once", ctx: childCtx }
+    const state = { systemPrompt: "角色", injectSystemPrompt: true, injectToolSections: true }
+    const create = (value: unknown) => host.childPrompt.withPending(state, () => host.childToolFilter.withPending([], () => host.onAgentCreated({ agent: value })))
+    await create(agent)
+    const permissionGuards = () => guards.filter((guard) => (guard as (call: { name: string }) => string | undefined)({ name: "wf_finish" })?.startsWith("WF_NOT_ROOT"))
+    expect(permissionGuards()).toHaveLength(1)
+    expect(masks).toEqual([{ allow: [] }])
+    await host.onAgentCreated({ agent })
+    expect(permissionGuards()).toHaveLength(1)
+    expect(masks).toHaveLength(1)
+    host.onAgentDisposed({ agent })
+    expect(guards).toHaveLength(0)
+    expect(masks).toHaveLength(0)
+    await expect(create({ ...agent, session: { append: () => { throw new Error("persistence failed") } } })).rejects.toThrow("persistence failed")
+    expect(guards).toHaveLength(0)
+    expect(masks).toHaveLength(0)
+    await root.fiber.dispose()
+  })
+
   it('跨 Host 重启从官方会话事件恢复空白名单；权限接口缺失阻止创建', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vw-host-'))
     cleanups.push(() => rm(dir, { recursive: true, force: true }))

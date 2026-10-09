@@ -210,6 +210,7 @@ export interface OrchestratorConfig {
   documentTextLimit: number
   /** 运行空闲超时毫秒数（无 in-flight 时看护门限）。 */
   runIdleTimeoutMs: number
+  runExecutionTimeoutMs?: number
   /** 单节点回流重试次数默认上限（节点未配置时兜底）。 */
   retryLimitDefault: number
   /** ReAct 迭代次数默认上限（节点未配置时兜底）。 */

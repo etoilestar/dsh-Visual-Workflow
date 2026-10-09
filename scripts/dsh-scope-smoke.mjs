@@ -53,8 +53,16 @@ try {
   assert.equal((await invoke(child, "read")).isError, false)
   assert.equal((await invoke(child, "wf_finish")).isError, true)
   unconfigured()
-  assert.throws(() => installChildToolPolicy(scope.ctx, ["ghost"], child), /实际子代理作用域不可用/)
-  assert.equal((await invoke(child, "custom")).isError, true, "failed installation must remain closed")
+  let dispatched = false
+  assert.throws(() => {
+    installChildToolPolicy(scope.ctx, ["ghost"], child)
+    dispatched = true
+  }, /实际子代理作用域不可用/)
+  assert.equal(dispatched, false, "failed creation must not dispatch")
+  assert.equal((await invoke(child, "custom")).isError, false, "failed installation must release its contributions")
+  const replacement = installChildToolPolicy(scope.ctx, [], child)
+  assert.equal((await invoke(child, "custom")).isError, true, "replacement scope policy must remain closed")
+  replacement()
   console.log(JSON.stringify({ status: "passed", runtime: "@deepseek-ai/dsh-tools", actualScopedExecutions: sequence }))
 } finally {
   for (const scope of owned.reverse()) await scope.dispose()

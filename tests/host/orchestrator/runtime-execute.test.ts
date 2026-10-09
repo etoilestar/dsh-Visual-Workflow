@@ -499,10 +499,62 @@ describe('wfRunNode 协作组路径（官方 Agent Team）', () => {
 })
 
 describe('wfFinish 收尾', () => {
+  it("test_legacy_required_failure_cannot_be_hidden_by_completed", async () => {
+    const h = await makeHarness()
+    await start(h, makeFlow())
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "error" })
+    expect((await h.runtime.wfFinish(caller, { status: "completed" })).status).toBe("failed")
+    expect((await h.store.getRun("run-1"))?.summary).toContain("n-a1")
+  })
+
+  it("test_unsettled_selected_node_rejects_success_but_allows_explicit_failure", async () => {
+    const h = await makeHarness()
+    await start(h, makeFlow())
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await expect(h.runtime.wfFinish(caller, { status: "completed" })).rejects.toMatchObject({ code: "WF_RUN_INCOMPLETE" })
+    expect(h.runtime.runSnapshot("run-1")?.status).toBe("running")
+    expect((await h.runtime.wfFinish(caller, { status: "failed" })).status).toBe("failed")
+  })
+
+  it("test_optional_conditional_branch_and_legal_early_finish_are_preserved", async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.lines.find((line) => line.id === "l2")!.condition = { type: "content", label: "需要进一步处理时" }
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "纯文本任务已完成，不需要额外分支" }] })
+    expect((await h.runtime.wfFinish(caller, { status: "completed" })).status).toBe("completed")
+    expect((await h.store.getRun("run-1"))?.nodes.find((node) => node.nodeId === "n-a2")?.status).toBe("skipped")
+  })
+
+  it("test_explicit_failure_branch_can_recover_a_failed_node", async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.lines = [flow.lines[0], { id: "recover", source: "n-a1", target: "n-a2", sourceHandle: "flow-out", targetHandle: "flow-in", condition: { type: "fail" } }, flow.lines[3]]
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "error" })
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a2" })
+    await h.runtime.handleSubagentEnd({ id: "child-2", stopReason: "completed" })
+    expect((await h.runtime.wfFinish(caller, { status: "completed" })).status).toBe("completed")
+  })
+
+  it("test_completed_downstream_requires_settled_unconditional_predecessor", async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.lines = [flow.lines[0], { id: "dependency", source: "n-a1", target: "n-a2", sourceHandle: "flow-out", targetHandle: "flow-in" }, flow.lines[3]]
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a2" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
+    await expect(h.runtime.wfFinish(caller, { status: "completed" })).rejects.toMatchObject({ code: "WF_RUN_INCOMPLETE" })
+  })
+
   it('completed：终态、summary、pending→skipped、持久化、锁释放', async () => {
     const h = await makeHarness()
     const { entry } = await start(h, makeFlow())
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
     const result = await h.runtime.wfFinish(caller, { status: 'completed', summary: '全部完成' })
 
     expect(result).toEqual({ ok: true, runId: 'run-1', status: 'completed' })

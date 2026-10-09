@@ -172,7 +172,7 @@ export interface NodeAttempt {
 }
 
 export interface RunTermination {
-  source: "parent_error" | "parent_finish" | "user_stop" | "idle_timeout" | "host_restart" | "runtime"
+  source: "parent_error" | "parent_finish" | "user_stop" | "idle_timeout" | "execution_timeout" | "host_restart" | "runtime"
   stopReason: string
   failure?: RunFailure
 }

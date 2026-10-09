@@ -180,6 +180,7 @@ export class VisualWorkflowHost extends Service {
         outputFullLimit: config.outputFullLimit,
         documentTextLimit: config.documentTextLimit,
         runIdleTimeoutMs: config.runIdleTimeoutMs,
+        runExecutionTimeoutMs: config.runExecutionTimeoutMs,
         retryLimitDefault: config.retryLimitDefault,
         reactIterationLimitDefault: config.reactIterationLimitDefault,
         wfAskAgentTimeoutMs: config.wfAskAgentTimeoutMs,
@@ -259,7 +260,7 @@ export class VisualWorkflowHost extends Service {
       this.modelSelection.contribution,
       this.childPrompt.contribution,
     ]
-    const disposers: Array<() => void> = [this.childToolFilter.contribution(childCtx, agent)]
+    const disposers: Array<() => void> = [this.childToolFilter.restore(agentId, childCtx, agent)]
     for (const contribution of contributions) {
       try {
         const dispose = contribution(childCtx)
@@ -270,16 +271,13 @@ export class VisualWorkflowHost extends Service {
     }
     // 重发布（冷恢复）时把已记住的成员级组成写回：创建窗口内写入的模型选择与工具白名单
     // 不跨子代理销毁存活，而官方冷恢复只依据持久描述符重建路由与工具面，故必须由我方留存重装。
-    // 无记录（普通节点子代理）时两处调用都是空操作。
     try {
       this.modelSelection.restore(agentId, childCtx)
     } catch {
       // 重装失败：模型选择退回官方路由，不阻断其余贡献
     }
-    const disposeToolFilter = this.childToolFilter.restore(agentId, childCtx, agent)
-    disposers.push(disposeToolFilter)
     return () => {
-      for (const dispose of disposers) {
+      for (const dispose of disposers.reverse()) {
         try {
           dispose()
         } catch {
@@ -326,18 +324,25 @@ export class VisualWorkflowHost extends Service {
     const pending = this.childPrompt.peekPending()
     const state = pending ?? this.childPromptStates.get(agentId) ?? persisted?.data?.prompt
     if (!state) return
-    const allow = this.childToolFilter.peekPending?.() ?? persisted?.data?.allow
+    const allow = pending ? this.childToolFilter.peekPending?.() : persisted?.data?.allow
     this.dropChildScope(agentId)
-    if (allow !== undefined) this.childToolFilter.remember(agentId, allow)
+    if (pending || persisted?.data) this.childToolFilter.remember(agentId, allow)
     // 创建事件由官方串行 await；权限错误必须让创建回滚，不能脱离事件链吞掉 Promise。
-    await this.childPrompt.withPending(state, async () => {
-      const dispose = this.installChildScope(agent.ctx, agentId, agent)
-      this.childScopeDisposers.set(agentId, dispose)
-    })
-    if (pending && agent.session?.append) {
-      agent.session.append("visual-workflow/child-composition", { prompt: state, ...(allow === undefined ? {} : { allow: [...allow] }) })
+    try {
+      await this.childPrompt.withPending(state, async () => {
+        const dispose = this.installChildScope(agent.ctx, agentId, agent)
+        this.childScopeDisposers.set(agentId, dispose)
+      })
+      if (pending && agent.session?.append) {
+        agent.session.append("visual-workflow/child-composition", { prompt: state, ...(allow === undefined ? {} : { allow: [...allow] }) })
+      }
+      this.childPromptStates.set(agentId, state)
+    } catch (error) {
+      this.dropChildScope(agentId)
+      this.childToolFilter.remember(agentId, undefined)
+      this.childPromptStates.delete(agentId)
+      throw error
     }
-    this.childPromptStates.set(agentId, state)
   }
 
   /**

@@ -7,7 +7,7 @@
 // paused/stopped/interrupted 断点时自动续跑接管，不再以 WF_PAUSED/WF_STOPPED 阻断。
 
 import { WF_RUN_NODE_WAIT } from '../shared/protocol.js'
-import { nodeById } from '../graph/index.js'
+import { isFlowLine, mainNodeIdOf, nodeById } from '../graph/index.js'
 import { DEFAULT_SYSTEM_LANGUAGE } from '../system-language.js'
 import { collabPromptOf, labelOf } from './graph-facts.js'
 import { effectiveReactLimitOf, effectiveRetryLimitOf, effectiveThinkingOf } from './node-params.js'
@@ -414,16 +414,36 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
     const snapshot = run.snapshot
     if (snapshot.status !== 'running') return { ok: true, runId: snapshot.id, status: snapshot.status, idempotent: true }
-    // 声明的机器契约已经失败时，父代理的成功文字不能覆盖失败事实。
+    const flow = await this.currentResolvedFlow(run)
+    if (snapshot.status !== "running") return { ok: true, runId: snapshot.id, status: snapshot.status, idempotent: true }
+    if (args?.status !== "failed" && snapshot.nodes.some((record) => record.status === "running")) {
+      throw new WfError("仍有已启动节点未结算，不能宣称完成；请等待结算或明确失败收尾", "WF_RUN_INCOMPLETE")
+    }
+    const lines = flow.lines.filter(isFlowLine)
+    const records = new Map(snapshot.nodes.map((record) => [record.nodeId, record]))
+    const idOf = (id: string) => mainNodeIdOf(flow, id) ?? id
+    const settled = (id: string) => ["ok", "react-capped", "armed"].includes(records.get(idOf(id))?.status ?? "")
+    // 无条件可达的路径是必需路径；条件选择仍由父代理决定，不把未选分支全部强制执行。
+    const required = new Set(flow.nodes.filter((node) => node.kind === "start").map((node) => node.id))
+    for (const id of required) for (const line of lines) if (idOf(line.source) === id && !line.condition) required.add(idOf(line.target))
     const requiredFailures = snapshot.nodes.filter((record) => {
       if (record.status !== 'fail') return false
-      const node = nodeById(run.baseFlow, record.nodeId)
-      return node?.kind === 'agent' && node.data.execution !== undefined
+      const recovered = lines.some((line) => idOf(line.source) === record.nodeId && line.condition && line.condition.type !== "pass" && settled(line.target))
+      return required.has(record.nodeId) && !recovered
     })
+    if (args?.status !== "failed" && requiredFailures.length === 0) {
+      const missing = lines.filter((line) => !line.condition && settled(line.target) && (records.get(idOf(line.target))?.attempts ?? 0) > 0).filter((line) => {
+        const target = nodeById(flow, idOf(line.target))
+        if (!target || !["agent", "parent", "group"].includes(target.kind)) return false
+        const source = nodeById(flow, idOf(line.source))
+        return source && ["agent", "parent", "group", "pause"].includes(source.kind) && !settled(line.source)
+      })
+      if (missing.length) throw new WfError(`已完成节点的必需前驱尚未完成：${missing.map((line) => line.source).join(", ")}`, "WF_RUN_INCOMPLETE")
+    }
     const isFailed = args?.status === 'failed' || requiredFailures.length > 0
     snapshot.status = isFailed ? 'failed' : 'completed'
     snapshot.summary = String(args?.summary ?? '')
-    if (args?.status !== 'failed' && requiredFailures.length) snapshot.summary = `声明执行契约的节点失败：${requiredFailures.map((record) => record.nodeId).join(', ')}；${snapshot.summary}`
+    if (args?.status !== 'failed' && requiredFailures.length) snapshot.summary = `必需执行路径的节点失败：${requiredFailures.map((record) => record.nodeId).join(', ')}；${snapshot.summary}`
     snapshot.endedAt = this.isoNow()
     snapshot.termination = { source: "parent_finish", stopReason: isFailed ? "failed" : "completed", ...(isFailed ? { failure: failureOf({ message: snapshot.summary }, "run_finish", "WF_PARENT_FINISH_FAILED", this.now()) } : {}) }
     this.log().info(JSON.stringify({ runId: snapshot.id, phase: "run_finish", status: snapshot.status, source: "parent_finish", errorCode: snapshot.termination.failure?.code }))

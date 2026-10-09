@@ -107,6 +107,22 @@ export const ORCH_HARD_CONSTRAINTS = {
   executorRole: '执行+编排：你既是执行节点，也要负责调度子代理；你只执行指向自身的节点任务',
 } as const
 
+/** 续跑仅注入当前调度事实；图、角色与历史产出继续从稳定引用读取。 */
+export function buildResumeOrchestrationPrompt(params: OrchestrationDirectiveParams): string {
+  return [
+    HEAD_MARKER,
+    `恢复编排：${ORCH_HARD_CONSTRAINTS.dispatchOnly}。`,
+    `${ORCH_HARD_CONSTRAINTS.nodeSettledSignal}；${ORCH_HARD_CONSTRAINTS.failureSemantics}。`,
+    `${ORCH_HARD_CONSTRAINTS.conditionSemantics}。`,
+    languageRuleLine(params.facts.systemLanguage),
+    MID_MARKER,
+    `当前流程事实源：${params.facts.definitionPath}。图、条件、责任和协作组成以该文件为准；不要复制整图或历史运行记录。`,
+    TAIL_MARKER,
+    `${ORCH_HARD_CONSTRAINTS.finishIdempotent}。`,
+    renderDynamicState(params.dynamic),
+  ].filter(Boolean).join("\n")
+}
+
 /**
  * 情况1（纯编排）父代理提示词构建器（纯函数）。
  * 首段仅编排身份 + 完成判定信号 + 调度协议；不包含执行者模式条目。

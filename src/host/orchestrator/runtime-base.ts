@@ -12,6 +12,7 @@
 // RuntimeObserve ← RuntimeLifecycle ← OrchestratorRuntime（runtime.ts 收口）。
 
 import { randomUUID } from 'node:crypto'
+import { DEFAULT_RUN_EXECUTION_TIMEOUT_MS } from "../config.js"
 import { activeMilestoneGateOf, isGroupMember, normalizeOrgMeta } from '../graph/index.js'
 import type { RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import type { RunSnapshot, RunStatus } from '../shared/types.js'
@@ -253,6 +254,14 @@ export abstract class RuntimeBase {
   /** 空闲看护门限（watchdog.ts 引用）。 */
   get idleTimeoutMs(): number {
     return this.deps.config.runIdleTimeoutMs
+  }
+
+  get executionTimeoutMs(): number {
+    return this.deps.config.runExecutionTimeoutMs ?? DEFAULT_RUN_EXECUTION_TIMEOUT_MS
+  }
+
+  parentRunning(entry: RunEntry): boolean {
+    return this.deps.agents.getRootAgent(entry.snapshot.sessionId)?.status === "running"
   }
 
   /** 子代理是否仍在运行（watchdog.ts 引用；经 AgentHost）。 */

@@ -9,6 +9,7 @@
 import {
   buildHybridPrompt,
   buildOrchestratorPrompt,
+  buildResumeOrchestrationPrompt,
   buildParentExecutorPrompt,
   buildParentTaskSpec,
   type CollabChannel,
@@ -162,7 +163,7 @@ export function buildParentRunPrompt(input: {
   }
 
   // 情况1：纯编排；或 hybrid/executor 在续跑中父代理执行单元已 ok（继承完成 → 纯编排语义）
-  return buildOrchestratorPrompt(
+  return (resume ? buildResumeOrchestrationPrompt : buildOrchestratorPrompt)(
     directiveParams(flow, defPath, mode, {
       ...(resume ? { resume } : {}),
       ...(input.question ? { question: input.question } : {}),

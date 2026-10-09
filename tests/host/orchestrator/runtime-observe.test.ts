@@ -93,9 +93,9 @@ describe('subagent/end 观察回写（§8 #21）', () => {
     await h.runtime.handleSubagentEnd({ id: 'child-unknown', stopReason: 'completed' })
     expect(entry.snapshot.nodes.every((n) => n.status === 'pending')).toBe(true)
 
-    // 启动后收尾：终态化把 running 收敛 fail；随后到达的 end 事件不得覆盖
+    // 已启动且未结算时只能明确失败收尾；迟到的完成事件不得覆盖终态。
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
-    await h.runtime.wfFinish(caller, { status: 'completed' })
+    await h.runtime.wfFinish(caller, { status: 'failed' })
     await h.runtime.handleSubagentEnd({ id: 'child-1', stopReason: 'completed', lastAssistantMessage: [{ type: 'text', text: 'X' }] })
     expect(entry.snapshot.nodes.find((n) => n.nodeId === 'n-a1')!.status).toBe('fail')
   })

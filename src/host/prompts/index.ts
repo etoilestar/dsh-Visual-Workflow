@@ -28,6 +28,7 @@ export {
 // 编排父代理提示词构建器（情况1/2）与三情况变体类型。
 export {
   buildOrchestratorPrompt,
+  buildResumeOrchestrationPrompt,
   buildHybridPrompt,
   ORCH_HARD_CONSTRAINTS,
   type OrchestrationDirectiveParams,

@@ -40,7 +40,7 @@ export function installChildToolPolicy(raw: unknown, allow: readonly string[] | 
   const approved = allow === undefined ? undefined : new Set(allow)
   const hidden: readonly string[] = CHILD_AGENT_HIDDEN_TOOLS
   const infrastructure: readonly string[] = [RESERVED_TRANSPORT_TOOL, ...TEAM_TOOL_NAMES]
-  // 守卫先于任何权限探测安装；验证失败时仍拒绝未授权调用，创建监听器向官方传播错误。
+  // 创建监听器必须等待策略成功，失败向上抛出，不能发布或派发未装配的 child。
   const disposeGuard = tools.guard(({ name }) => {
     if (typeof name !== 'string') return 'WF_CHILD_TOOL_DENIED: 无法识别工具执行名称'
     if (hidden.includes(name)) return "WF_NOT_ROOT: 父代理专属工具禁止子代理调用"
@@ -49,33 +49,36 @@ export function installChildToolPolicy(raw: unknown, allow: readonly string[] | 
     }
     return undefined
   })
-  if (approved === undefined) return disposeGuard
-  const inherited: string[] = []
-  for (const name of approved) {
-    if (hidden.includes(name) || infrastructure.includes(name)) continue
-    // preset 的 subagent 可能只注册在根 Agent 上；它不是子 scope 的继承能力。
-    if (!tools.get(name, scope)) {
-      if (name === "subagent") continue
-      throw new ChildToolPermissionError(`节点工具在实际子代理作用域不可用：${name}`)
-    }
-    try {
-      // restrict 是公开的权限裁决接口；在首轮推理前探测并立即撤销，不读取私有 registry。
-      tools.restrict({ deny: [name] })()
-      inherited.push(name)
-    } catch (error) {
-      // 实际可见且不属于继承面的名称是 scope 自身注册工具，只由上面的守卫约束。
-      if (!(error instanceof Error) || !error.message.startsWith("tools.restrict() names unknown global tool")) {
-        throw new ChildToolPermissionError(`工具权限预检查失败：${name}`)
-      }
+  const disposers = [disposeGuard]
+  let disposed = false
+  const dispose = () => {
+    if (disposed) return
+    disposed = true
+    for (const release of disposers.reverse()) {
+      try { release() } catch { /* 继续释放其他独立贡献 */ }
     }
   }
-  let disposeRestriction: () => void
   try {
-    disposeRestriction = tools.restrict({ allow: inherited })
-  } catch {
-    throw new ChildToolPermissionError("子代理工具白名单安装失败；已阻止未授权工具调用")
+    if (approved !== undefined) {
+      const visible = [...approved].filter((name) => !hidden.includes(name) && !infrastructure.includes(name))
+      const candidates = visible.filter((name) => {
+        if (tools.get(name, scope)) return true
+        if (name === "subagent") return false
+        throw new ChildToolPermissionError(`节点工具在实际子代理作用域不可用：${name}`)
+      })
+      // 公开 restrict([]) 只移除继承面；同一个 agent key 下仍可见的工具属于自身面。
+      // 不读取私有 registry，也不根据异常文案判断工具类型。
+      const releaseProbe = tools.restrict({ allow: [] })
+      let inherited: string[]
+      try { inherited = candidates.filter((name) => !tools.get(name, scope)) } finally { releaseProbe() }
+      disposers.push(tools.restrict({ allow: inherited }))
+    }
+    return dispose
+  } catch (error) {
+    dispose()
+    if (error instanceof ChildToolPermissionError) throw error
+    throw new ChildToolPermissionError("子代理工具白名单安装失败；创建已中止，请检查当前 Scope 的 get/restrict/guard 契约")
   }
-  return () => { disposeRestriction(); disposeGuard() }
 }
 
 export function createChildToolFilterSetup(): ChildToolFilterSetup {
@@ -89,8 +92,6 @@ export function createChildToolFilterSetup(): ChildToolFilterSetup {
       if (allow === undefined) remembered.delete(id)
       else remembered.set(id, [...allow])
     },
-    restore: (id, context, scope) => remembered.has(id)
-      ? installChildToolPolicy(context, remembered.get(id), scope)
-      : () => {},
+    restore: (id, context, scope) => installChildToolPolicy(context, remembered.get(id), scope),
   }
 }
