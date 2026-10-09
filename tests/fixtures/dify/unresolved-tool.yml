@@ -1,0 +1,47 @@
+app:
+  name: Basic LLM
+  mode: workflow
+  description: Basic fixture
+kind: app
+version: 0.1.0
+workflow:
+  variables: []
+  environment_variables: []
+  conversation_variables: []
+  graph:
+    nodes:
+      - id: start-node
+        type: custom
+        data:
+          type: start
+          title: Start
+          variables:
+            - variable: query
+              type: text-input
+              required: true
+      - id: llm-node
+        type: custom
+        data:
+          type: tool
+          title: Writer
+          provider_id: missing
+          tool_name: absent
+          model:
+            provider: sample
+            name: sample-model
+          prompt_template:
+            - role: user
+              text: "{{#start-node.query#}}"
+      - id: answer-node
+        type: custom
+        data:
+          type: answer
+          title: Answer
+          answer: "{{#llm-node.text#}}"
+    edges:
+      - id: edge-1
+        source: start-node
+        target: llm-node
+      - id: edge-2
+        source: llm-node
+        target: answer-node
