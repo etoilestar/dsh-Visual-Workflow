@@ -68,7 +68,7 @@ export async function prepareRunInputs(flow: WorkflowDocument, snapshot: RunSnap
 export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, managedRoot?: string, authorizedFiles?: readonly string[], hasRuntimeInputs = false): Promise<Record<string, string | null>> {
   const contract = executionOf(node)
   const edges = ctxInEdges(flow, node.id)
-  if (contract.inputSource === 'ctx' && !edges.length) throw inputError(`节点 ${node.id} 声明 ctx 输入却没有 ctx 连线`, 'WF_INPUT_CONTEXT_MISSING')
+  if (contract.inputSource === 'ctx' && !edges.length) throw inputError(`节点 ${node.id} 声明 ctx 输入却没有 ctx 连线；请连接显式 ctx。若要无 ctx 的自动交接，请明确将输入契约配置为 runtime 并启用 auto`, 'WF_INPUT_CONTEXT_MISSING')
   if (contract.inputSource === 'workspace' && !snapshot.workingDirectory) throw inputError(`节点 ${node.id} 缺少实际会话工作目录`, 'WF_INPUT_PATH_UNRESOLVED')
   if (contract.inputSource === 'runtime' && !hasRuntimeInputs && !edges.some((edge) => snapshot.fileBindings?.[edge.source]?.length)) throw inputError(`节点 ${node.id} 缺少连接到该节点的运行期文件绑定`, 'WF_INPUT_FILE_UNBOUND')
   for (const edge of edges) {

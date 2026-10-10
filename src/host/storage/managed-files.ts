@@ -39,7 +39,7 @@ export function managedFilePath(dataDir: string, name: string): string {
  * 并发语义：同一目标的写入先经进程内锁串行化，再交给通用原子原语发布
  * （临时文件 + fsync + rename + 失败清理都由原语负责）。
  */
-/** Runtime uploads use a reserved session namespace; ordinary template files retain their existing names. */
+/** Runtime uploads use a reserved namespace, not caller authorization; ordinary template files retain their existing names. */
 export function runtimeManagedPrefix(sessionId: string): string {
   return `runtime-${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}-`
 }

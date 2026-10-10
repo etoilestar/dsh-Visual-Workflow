@@ -6,9 +6,9 @@
 
 ## 使用方式
 
-工作台点击运行后，可以填写文本、JSON、选择当前会话的官方附件或受控上传文件。为每项指定输入名称和目标：工作流或一个 Agent。文件上传只更新输入草稿，点击运行/绑定才交付；附件上传不等于文件绑定。
+普通“运行”在没有缺失的必需运行输入时直接启动，不弹输入窗。需要补齐声明输入时打开弹窗；也可主动点击“配置输入后运行”，填写文本、JSON、选择当前会话的官方附件或受控上传文件，并选择 auto/explicit。取消弹窗不会发起运行，切换文档或卸载后旧请求不回写。恢复沿用已有合法输入及策略。为每项指定输入名称和目标：工作流或一个 Agent。文件上传只更新输入草稿，点击运行/绑定才交付；附件上传不等于文件绑定。
 
-工作流级输入仅交付唯一初始 Agent，节点级同名输入优先。多个初始 Agent、条件入口或无法明确目标时，应直接选择节点，服务端返回 `WF_INPUT_AMBIGUOUS`，不会选择一个候选。多个附件也不自动选择。没有声明必需输入的旧工作流允许空输入运行。
+工作流级输入仅交付拥有真实 flow 入线、且入线全部来自无条件 Start 的唯一初始 Agent，节点级同名输入优先。孤立或仅接 ctx 的 Agent 不作为初始目标，proxy 按原 canonical ID 解析。多个初始 Agent、条件入口或无法明确目标时，应直接选择节点，服务端返回 `WF_INPUT_AMBIGUOUS`，不会选择一个候选。多个附件也不自动选择。没有声明必需输入的旧工作流允许空输入运行。
 
 可在 Agent 的已有 execution 契约中声明简单输入要求，例如：
 
@@ -38,11 +38,21 @@
 
 文件输入为 `{kind:"file",fileRef:{source:"managed",path:"fileUpload 返回的 managedPath"}}`，或 source 为 attachment 的官方 attachmentId/name/bytes 引用。服务端忽略调用方伪造的附件 path/origin，以当前会话 user/message 中被官方附件服务接纳的结构化引用解析路径。路径越界、软链接逃逸、跨会话官方附件、任意宿主绝对路径均不能构成授权。不扫描附件目录；新的 RuntimeInputs 不接收 workspace 任意路径。
 
-运行输入的 fileUpload 增加可选 sessionId，服务端在原有受管目录中分配保留的会话文件名前缀；解析时校验当前会话及规范化路径，禁止跨会话复用受管引用或通过无会话上传伪造该命名空间。旧 File Node 不带 sessionId 的上传仍按原名字工作。用户必须明确提供上传返回的受管引用，不能通过 Prompt 猜路径。上传使用唯一文件名，避免覆盖另一个输入。文件内容留在磁盘，不进入快照或任务块；文本/JSON 总输入限制为 256 KiB，JSON 深度、槽数量及单槽数量有界。
+运行输入的 fileUpload 增加可选 sessionId，服务端在原有受管目录中分配保留的会话文件名前缀；解析时比对目标会话命名空间及规范化路径，拒绝其他命名空间的受管引用或通过无会话上传伪造该命名空间。旧 File Node 不带 sessionId 的上传仍按原名字工作。用户必须明确提供上传返回的受管引用，不能通过 Prompt 猜路径。上传使用唯一文件名，避免覆盖另一个输入。文件内容留在磁盘，不进入快照或任务块；文本/JSON 总输入限制为 256 KiB，JSON 深度、槽数量及单槽数量有界。
 
-`runtimeInputOptions({sessionId,flowId})` 返回节点输入声明、当前会话可验证附件和最近可恢复输入。
+`runtimeInputOptions({sessionId,flowId})` 返回节点输入声明、当前会话可验证附件和最近可恢复输入。新增的 files 选项只包含 attachmentId/name/bytes，不返回宿主 path；客户端按这三个字段提交，服务端重新解析真实路径。
 
 `runInputBind({sessionId,runId,nodeId,expectedRevision,inputs})` 只替换指定 pending 节点的输入槽。绑定与派发互斥，持久化成功后发布新版本；停止/恢复后的旧绑定不得发布。其他 child 在授权期间结算的状态保留。原有运行锁、暂停、恢复、终态收尾机制不变。
+
+## 宿主认证与部署限制
+
+本轮只裁剪新增选项的 files 字段，没有完成所有快照接口的路径隔离：options.checkpoint.runtimeInputs、runStatus/runHistory、绑定返回快照及旧 fileBindings/artifacts 仍可能含规范化宿主路径。runStatus/runHistory 等按请求 sessionId 与记录匹配；这是资源归属检查，不能证明调用者身份。activeRuns 缺省支持全会话列表，符合原工作台全局模式。
+
+核查了已安装 DSH 0.1.6-alpha.2 的公开 dsh-host-webserver WebRoute/实现和 dsh-client-connection HostConnectionHandle：webServer.register 的 handler 仅接收原始 IncomingMessage/ServerResponse，并直接分发命名路由；connection.requestRejection 为官方 /api 通道提供 Host/Origin 和进程 token/browser cookie 认证，没有公开调用者→工作流 sessionId 的归属证明。插件现有 /visual-workflow 前缀直接注册在 webServer，不经过 /api，不能假定自动继承其认证。
+
+fileUpload 的 sessionId 及 runtimeManagedPrefix 哈希只用于命名空间分隔，**不是会话授权**。可达该端点的调用者仍可提交别人的 sessionId 来选择其命名空间；本 PR 没有解决此边界，也不声称多租户会话隔离。合法命名空间上传、跨命名空间引用拒绝、无会话保留前缀防伪及旧模板上传测试都不等同于调用者身份验证。
+
+部署安全前置条件：只向可信操作人员开放整个 /visual-workflow 路由，由现场已有访问控制保护；仅设置 DSH 登录 token 不能据此认定该插件前缀受保护。需要不可信多用户访问时，应先单独完成宿主可信身份/会话归属方案。当前云环境无法验证现场反向代理或网络访问控制，不在 #10 中引入自制登录、Session Manager、全局权限框架，也不扩大文件访问范围。
 
 ## 首次交付与预算
 
@@ -54,7 +64,7 @@
 
 ## 自动交接边界
 
-explicit 是缺省模式，保留原有 ctx。auto 只处理唯一、无条件、直接上游 Agent 已合法结算的简单串行依赖，不改变画布连线。显式 ctx 总是优先；明确节点输入整体覆盖自动来源。
+explicit 是缺省模式，保留原有 ctx。auto 只处理唯一、无条件、直接上游 Agent 已合法结算的简单串行依赖，不改变画布连线。显式 ctx 总是优先；明确节点输入整体覆盖自动来源。声明 inputSource="ctx" 的节点在 explicit/auto 下都必须连接原有显式 ctx，即使已有运行输入也不能替代该契约；缺线返回 WF_INPUT_CONTEXT_MISSING 并提示连接 ctx。希望无 ctx 自动交接时，用户应明确选用 inputSource="runtime" 等适合运行输入的契约并启用 auto，运行时不改写节点定义。原有 File Node、runtime/workspace 规则不变。
 
 下游首条任务带入 `upstreamText` 和/或 `upstreamFiles`，附 nodeId、来源 runId、attempt。文本按当前合法结算记录交付，JSON 格式的最终文本仍按文本交付；业务消费者自行解析，不新增结果体系。文件仅使用 execution.outputFiles 声明且经 #8 现有存在性、本次写入签名验证的产物，并核对结算后的签名与 attempt，不能使用前一尝试或事后替换的文件。
 
@@ -64,7 +74,7 @@ explicit 是缺省模式，保留原有 ctx。auto 只处理唯一、无条件�
 
 没有 outputFiles 的节点继续采用原文本结算。正常回合结束表示运行时接受该回合，不证明业务结论正确。只对声明文件的存在性/本次写入作机器核验；无机器证据的业务结论不能被标成“机器验证通过”。
 
-输入绑定不会扩大工具白名单或 sandbox。子代理仍须使用已授权 read/write 等工具；若现场沙箱拒绝访问，保留真实失败，不能绕过检查。ask_user_question 上传若没有公开结构化授权引用，不支持自动拾取，使用工作台受控上传。
+输入绑定不会扩大工具白名单或 sandbox。子代理仍须使用已授权 read/write 等工具；若现场沙箱拒绝访问或 Docker sandbox 不可用，这是现场环境故障，保留真实失败，本 PR 不负责绕过检查。ask_user_question 上传若没有公开结构化授权引用，不支持自动拾取，使用工作台受控上传。
 
 ## 验证
 
@@ -119,7 +129,7 @@ C：原五节点销售链，只有 start → load_data → quality_check → sal
 - managed-files.ts/templates.ts：现有受管上传的可选会话命名范围，拒绝跨会话运行引用，保留旧文件模板入口。
 - run-sales-live.mjs：三类现场验收，保留原显式销售模式和可配置服务/路由。
 
-## 本次交付记录
+## 首轮交付记录（基线 1a3054d）
 
 - pnpm check：通过，197 个测试文件、2313 项测试，包含四个 TypeScript Program、构建和 client-smoke。
 - pnpm build：单独执行通过，48 个变化的 lib 生成文件同步，其中 JS 22、.d.ts 26（调试 .map 按仓库规则忽略）。
@@ -175,3 +185,13 @@ C：原五节点销售链，只有 start → load_data → quality_check → sal
 - `tests/host/storage/managed-files.test.ts`
 - `tests/integration/node-recovery.test.ts`
 - `tests/integration/run-sales-live.test.ts`
+
+## 最后一轮兼容修订
+
+插件版本更新为 0.11.0，无新增依赖。package.json 是唯一包版本来源；pnpm-lock.yaml 不含根包版本，cordis.patch.yml/serve.patch.yml 无独立版本字段，构建和打包沿用原脚本。#8 的 0.10.1 tarball 记录保留为历史验收，不作为当前安装版本；本轮包应为 dsh-visual-workflow-0.11.0.tgz。
+
+本轮只修初始目标边界、附件选项投影、旧工作流直接运行/主动配置分流、ctx 诊断，并记录上传认证限制。没有新增源码文件或 Runtime 子类，没有修改 NodeAgentRunner、RuntimeObserve 或原有状态机；默认仍为 explicit，不自动升级旧工作流为 auto。完整本轮逐文件增删与最终测试数量见 PR #10 描述。A/B/C 现场脚本及 #8 恢复说明继续保留，真实 Docker/模型 E2E 为 **NOT RUN**。
+
+本轮最终 `pnpm check` 通过：197 个测试文件、2334 项测试（比基线新增 21 项），含四个 TS Program、构建与 client-smoke。旧/新官方 Scope smoke 分别通过 standingKeyFor/acquireScope；这些检查不涉及真实模型。单独 `pnpm build` 和包版本/生成 lib 核对结果同步记录在 PR #10。
+
+独立 `pnpm build` 通过，13 个本轮生成 lib 文件同步（6 个 JS、7 个声明）。npm pack 生成 dsh-visual-workflow-0.11.0.tgz（17,469,626 字节）；包版本及全部 13 个修改 lib 的内容与工作区逐字节比对通过。

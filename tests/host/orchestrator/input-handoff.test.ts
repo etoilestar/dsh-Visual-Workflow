@@ -16,6 +16,30 @@ it("test_workflow_input_multiple_initial_agents_requires_explicit_target", () =>
   const flow = serial()
   expect(workflowInputTarget(flow)).toBe("n-a1")
   flow.lines = flow.lines.filter((line) => line.id !== "next")
+  flow.lines.push({ id: "second-in", source: "n-start", target: "n-a2", sourceHandle: "flow-out", targetHandle: "flow-in" })
+  expect(() => workflowInputTarget(flow)).toThrowError(expect.objectContaining({ code: "WF_INPUT_AMBIGUOUS" }))
+})
+
+it("test_initial_input_target_ignores_isolated_agent_and_ctx_only_connection", () => {
+  const flow = serial()
+  flow.nodes.push({ ...structuredClone(flow.nodes.find((node) => node.id === "n-a1")!), id: "isolated" })
+  expect(workflowInputTarget(flow)).toBe("n-a1")
+  flow.lines.push({ id: "context-only", source: "n-start", target: "isolated", sourceHandle: "ctx-out", targetHandle: "ctx-in" })
+  expect(workflowInputTarget(flow)).toBe("n-a1")
+})
+
+it("test_initial_proxy_flow_and_explicit_ctx_resolve_same_canonical_target", () => {
+  const flow = serial()
+  flow.nodes.push({ id: "proxy-first", kind: "proxy", proxySourceId: "n-a1", position: { x: 0, y: 0 } })
+  flow.lines[0].target = "proxy-first"
+  flow.lines.push({ id: "ctx", source: "n-a1", target: "n-a2", sourceHandle: "ctx-out", targetHandle: "ctx-in" })
+  expect(workflowInputTarget(flow)).toBe("n-a1")
+})
+
+it.each(["isolated", "condition"])("test_no_valid_initial_flow_%s_requires_explicit_target", (kind) => {
+  const flow = serial()
+  if (kind === "isolated") flow.lines = []
+  else flow.lines[0].condition = { type: "pass" }
   expect(() => workflowInputTarget(flow)).toThrowError(expect.objectContaining({ code: "WF_INPUT_AMBIGUOUS" }))
 })
 

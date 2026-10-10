@@ -4,20 +4,20 @@ import type { RunSnapshot } from "../../host/shared/types.js"
 import type { Dict } from "../i18n.js"
 import type { RemoteFace } from "./useRemote.js"
 import { EP } from "../lib/remote.js"
-import type { RuntimeInputValue, SessionInputFile } from "../../host/shared/runtime-types.js"
+import type { RuntimeInputValue, InputAttachmentRef } from "../../host/shared/runtime-types.js"
 export type InputEditorKind = "text" | "json" | "attachment"
 export function validInputSlot(name: string): boolean { return !!name.trim() && name.length <= 128 && !["__proto__", "prototype", "constructor"].includes(name) }
-export function formInputValue(kind: InputEditorKind, value: string, files: readonly SessionInputFile[]): RuntimeInputValue {
+export function formInputValue(kind: InputEditorKind, value: string, files: readonly InputAttachmentRef[]): RuntimeInputValue {
   if (kind === "text") return { kind: "text", value }
   if (kind === "json") return { kind: "json", value: JSON.parse(value) as import("../../host/shared/runtime-types.js").JsonValue }
   const file = files.find((entry) => entry.attachmentId === value)
   if (!file) throw new Error("attachmentId")
-  return { kind: "file", fileRef: { source: "attachment", ...file } }
+  return { kind: "file", fileRef: { source: "attachment", attachmentId: file.attachmentId, name: file.name, bytes: file.bytes } }
 }
 
 export interface RuntimeInputSelection { runtimeInputs: RuntimeInputs; handoffPolicy: HandoffPolicy; requestGeneration?: number }
 export interface RuntimeInputLifecycle { capture(): number; isCurrent(ticket: number): boolean }
-export type PrepareRuntimeInputs = (sessionId: string, flowId: string, runId?: string, binding?: boolean) => Promise<RuntimeInputSelection | null>
+export type PrepareRuntimeInputs = (sessionId: string, flowId: string, runId?: string, binding?: boolean, configure?: boolean) => Promise<RuntimeInputSelection | null | undefined>
 export interface RuntimeInputDialogState {
   sessionId: string; flowId: string; options: RuntimeInputOptions; inputs: RuntimeInputs; handoffPolicy: HandoffPolicy
   nodeId?: string; runId?: string; revision?: number; eligibleNodes: string[]; error: string; busy: boolean
@@ -58,7 +58,7 @@ export function useRuntimeInputs(remote: RemoteFace, t: Dict, owner: string) {
     setDialog(next)
   }, [])
 
-  const prepare: PrepareRuntimeInputs = useCallback(async (sessionId, flowId, runId, binding = false) => {
+  const prepare: PrepareRuntimeInputs = useCallback(async (sessionId, flowId, runId, binding = false, configure = true) => {
     cancel()
     requested.current = { owner, flowId }
     const expected = generation.current
@@ -68,9 +68,15 @@ export function useRuntimeInputs(remote: RemoteFace, t: Dict, owner: string) {
     if (!alive.current || generation.current !== expected) return null
     if (checkpoint && checkpoint.flowId !== flowId) throw new Error(t.runtimeInputOwnerError)
     const inputs = structuredClone(checkpoint?.runtimeInputs ?? options.checkpoint?.runtimeInputs ?? { workflowInputs: {}, nodeInputs: {} })
+    const handoffPolicy = checkpoint?.handoffPolicy ?? options.handoffPolicy
+    const missingRequired = Object.entries(options.nodeInputs).some(([id, requirements]) => Object.entries(requirements).some(([name, requirement]) => requirement.required !== false && !(inputs.nodeInputs[id]?.[name] ?? inputs.workflowInputs[name] ?? []).some((value) => value.kind === requirement.kind)))
+    if (!binding && !configure && !missingRequired) {
+      requested.current = null
+      return checkpoint?.runtimeInputs || options.checkpoint?.runtimeInputs || handoffPolicy === "auto" ? { runtimeInputs: inputs, handoffPolicy, requestGeneration: expected } : undefined
+    }
     const eligibleNodes = Object.keys(options.nodeInputs).filter((id) => !binding || checkpoint?.nodes.some((node) => node.nodeId === id && node.status === "pending" && node.attempts === 0))
     if (binding && !eligibleNodes.length) throw new Error(t.runtimeNoPendingNode)
-    const state: RuntimeInputDialogState = { sessionId, flowId, options, inputs, handoffPolicy: checkpoint?.handoffPolicy ?? options.handoffPolicy, eligibleNodes, ...(binding ? { nodeId: eligibleNodes[0], runId, revision: checkpoint?.inputRevision ?? 0 } : {}), busy: false, error: "" }
+    const state: RuntimeInputDialogState = { sessionId, flowId, options, inputs, handoffPolicy, eligibleNodes, ...(binding ? { nodeId: eligibleNodes[0], runId, revision: checkpoint?.inputRevision ?? 0 } : {}), busy: false, error: "" }
     current.current = state
     setDialog(state)
     return new Promise<RuntimeInputSelection | null>((resolve) => { pending.current = resolve })

@@ -6,10 +6,31 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
+import { writeFile } from "node:fs/promises"
 import { DatabaseSync } from 'node:sqlite'
 import { cleanupAll, databaseNode, makeFlow, makeHarness, saveFlow } from './fixtures/api-harness.js'
 
 afterEach(cleanupAll)
+
+it("test_input_options_hide_attachment_path_and_binding_uses_current_session_resolution", async () => {
+  let path = ""
+  const file = { attachmentId: "admitted", name: "input.txt", bytes: 4 }
+  const h = await makeHarness({ sessionInputFiles: async (sessionId) => sessionId === "session-1" ? [{ ...file, path }] : [] })
+  path = join(h.dataDir, "host-private-location.txt")
+  await writeFile(path, "data")
+  await saveFlow(h)
+  const options = await h.api.handle("runtimeInputOptions", { sessionId: "session-1", flowId: "flow-1" }) as { files: unknown[] }
+  expect(options.files).toEqual([file])
+  expect(JSON.stringify(options)).not.toContain(path)
+  await h.api.handle("run", { sessionId: "session-1", flowId: "flow-1" })
+  const binding = { sessionId: "session-1", runId: "run-1", nodeId: "n-a2", expectedRevision: 0, inputs: { source: [{ kind: "file", fileRef: { source: "attachment", ...file } }] } }
+  await h.api.handle("runInputBind", binding)
+  expect(h.runtime.runSnapshot("run-1")?.runtimeInputs?.nodeInputs["n-a2"].source[0]).toMatchObject({ fileRef: { path } })
+  binding.expectedRevision = 1
+  await h.api.handle("runInputBind", { ...binding, inputs: { source: [{ kind: "file", fileRef: { source: "attachment", ...file, path: "/forged/host/path" } }] } })
+  expect(h.runtime.runSnapshot("run-1")?.runtimeInputs?.nodeInputs["n-a2"].source[0]).toMatchObject({ fileRef: { path } })
+  await expect(h.api.handle("runInputBind", { ...binding, sessionId: "other", expectedRevision: 2 })).rejects.toMatchObject({ code: "WF_NOT_FOUND" })
+})
 
 describe('运行端点', () => {
   it('run 无断点全新启动；有断点自动续跑（resumedFromRunId）', async () => {

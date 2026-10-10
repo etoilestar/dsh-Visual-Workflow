@@ -121,6 +121,7 @@ export declare const zh: {
     runtimeAuto: string;
     runtimeBind: string;
     runtimeBindButton: string;
+    runtimeConfigureRun: string;
     runtimeBindTitle: string;
     runtimeCancel: string;
     runtimeChooseAttachment: string;

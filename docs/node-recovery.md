@@ -1,5 +1,7 @@
 # PR #8：输入、子代理恢复与业务结算
 
+本文保留 #8 的 0.10.1 修复与 tarball 验收记录。#10 当前插件为 0.11.0，安装及轻量输入边界见 [运行输入说明](runtime-input-handoff.md)，无需改动下文恢复机制。
+
 基线为 PR #7 合并后的 `main`（`fdc1b33`）。本修复面向 DSH `0.1.6-alpha.2` / Node.js 22，保留新版 `acquireScope()` 和旧版 `standingKeyFor()`。插件版本为 `0.10.1`。不修改官方 DSH 源码、数据库或 Dify 导入业务。
 
 ## 故障与修复路径

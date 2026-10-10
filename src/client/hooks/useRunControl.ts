@@ -15,7 +15,7 @@ export interface RunControlFace {
   prepareInputs?: PrepareRuntimeInputs
   inputLifecycle?: RuntimeInputLifecycle
   /** 运行当前实例（会话 = 实例绑定的会话；存在断点自动续跑）。 */
-  startRun(sessionId: string, flowId: string): Promise<string | null>
+  startRun(sessionId: string, flowId: string, configureInputs?: boolean): Promise<string | null>
   /** 停止运行：携带实例归属会话 id 供后端归属校验（越权会话不得停止他人运行）。 */
   stopRun(sessionId: string, runId: string): Promise<void>
 }
@@ -24,8 +24,8 @@ export interface RunControlFace {
 export function useRunControl(dispatch: Dispatch<StudioAction>, remote: RemoteFace, prepareInputs?: PrepareRuntimeInputs, inputLifecycle?: RuntimeInputLifecycle): RunControlFace {
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
-  const startRun = useCallback(async (sessionId: string, flowId: string) => {
-    const selection = prepareInputs ? await prepareInputs(sessionId, flowId) : undefined
+  const startRun = useCallback(async (sessionId: string, flowId: string, configureInputs = false) => {
+    const selection = prepareInputs ? await prepareInputs(sessionId, flowId, undefined, false, configureInputs) : undefined
     if (!alive.current || selection === null) return null
     const ticket = selection?.requestGeneration ?? inputLifecycle?.capture()
     const result = await remote.call(EP.EP_RUN, { sessionId, flowId, ...(selection ? { runtimeInputs: selection.runtimeInputs, handoffPolicy: selection.handoffPolicy } : {}) }) as { runId?: unknown; sessionId?: unknown }

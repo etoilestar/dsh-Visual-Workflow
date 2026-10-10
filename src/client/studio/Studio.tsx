@@ -342,7 +342,10 @@ export function Studio({ t, sessionId, remote: remoteProp, onRunImmersive }: Stu
       onSelectFlowAsset={selectFlowAsset}
       onPlaceRoleAsset={placeRoleAsset}
     />
-    {state.mode === "mode1" && currentFlow && state.run.runId && <button type="button" className="wf-btn wf-runtime-bind-control" onClick={() => { void runtimeInputs.prepare(currentFlow.sessionId, currentFlow.id, state.run.runId!, true).catch(toastError) }}>{t.runtimeBindButton}</button>}
+    {state.mode === "mode1" && currentFlow && <div className="wf-runtime-bind-control">
+      {!running && <button type="button" className="wf-btn" onClick={() => { void run.startRun(true) }}>{t.runtimeConfigureRun}</button>}
+      {state.run.runId && running && <button type="button" className="wf-btn" onClick={() => { void runtimeInputs.prepare(currentFlow.sessionId, currentFlow.id, state.run.runId!, true).catch(toastError) }}>{t.runtimeBindButton}</button>}
+    </div>}
     {runtimeInputs.dialog && <RuntimeInputsDialog state={runtimeInputs.dialog} t={t} onCancel={runtimeInputs.cancel} onChange={runtimeInputs.change} onAdd={runtimeInputs.add} onRemove={runtimeInputs.remove} onUpload={(target, name, file) => { void runtimeInputs.upload(target, name, file) }} onSubmit={() => { void runtimeInputs.submit() }} />}
     </>
   )

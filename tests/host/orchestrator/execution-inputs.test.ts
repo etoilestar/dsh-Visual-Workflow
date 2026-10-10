@@ -16,6 +16,19 @@ function withFile() {
 }
 
 describe('explicit execution inputs and artifacts', () => {
+  it.each(["explicit", "auto"] as const)("test_declared_ctx_%s_rejects_runtime_input_substitution_with_actionable_diagnostic", async (handoffPolicy) => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    const node = flow.nodes.find((entry) => entry.id === "n-a1")!
+    if (node.kind !== "agent") throw new Error("fixture")
+    node.data.execution = { inputSource: "ctx" }
+    await h.store.saveWorkflow(flow, "session-1")
+    await h.runtime.startRun({ sessionId: "session-1", flowId: flow.id, handoffPolicy, runtimeInputs: { nodeInputs: { [node.id]: { source: [{ kind: "text", value: "available runtime data" }] } } } })
+    await expect(h.runtime.wfRunNode(caller, { nodeId: node.id })).rejects.toMatchObject({ code: "WF_INPUT_CONTEXT_MISSING", message: expect.stringContaining("请连接显式 ctx") })
+    expect(h.runner.calls).toHaveLength(0)
+    expect(h.runtime.runSnapshot("run-1")?.nodes.find((entry) => entry.nodeId === node.id)).toMatchObject({ status: "pending", attempts: 0 })
+    expect((await h.store.getWorkflow("session-1", flow.id))?.nodes.find((entry) => entry.id === node.id)).toMatchObject({ data: { execution: { inputSource: "ctx" } } })
+  })
   it.each([undefined, {}, { inputSource: "workspace" as const, requiredFiles: ["shared.txt"] }])("test_text_and_workspace_tasks_keep_soft_schemas_and_empty_output_without_ctx_or_output_files_%j", async (execution) => {
     const h = await makeHarness(undefined, { workingDirectory: async () => h.dir })
     await writeFile(join(h.dir, "shared.txt"), "shared workspace")

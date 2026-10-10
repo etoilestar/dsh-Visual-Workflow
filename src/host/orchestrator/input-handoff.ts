@@ -9,7 +9,11 @@ import { authorizedOutputPath, outputSignature } from "./execution-file-access.j
 /** Workflow inputs belong to one initial Agent, never to every node or an arbitrary branch. */
 export function workflowInputTarget(flow: WorkflowDocument): string {
   const idOf = (id: string): string => mainNodeIdOf(flow, id) ?? id
-  const candidates = flow.nodes.filter((node) => node.kind === "agent" && !isGroupMember(flow, node.id) && flow.lines.filter(isFlowLine).filter((line) => idOf(line.target) === node.id).every((line) => !line.condition && nodeById(flow, idOf(line.source))?.kind === "start"))
+  const candidates = flow.nodes.filter((node) => {
+    if (node.kind !== "agent" || isGroupMember(flow, node.id)) return false
+    const incoming = flow.lines.filter(isFlowLine).filter((line) => idOf(line.target) === node.id)
+    return incoming.length > 0 && incoming.every((line) => !line.condition && nodeById(flow, idOf(line.source))?.kind === "start")
+  })
   if (candidates.length !== 1) throw new WfError("工作流输入没有唯一初始 Agent；请明确绑定到指定节点", "WF_INPUT_AMBIGUOUS")
   return candidates[0].id
 }

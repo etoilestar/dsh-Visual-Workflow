@@ -97,6 +97,8 @@ export class TemplateEndpoints extends VisualWorkflowApiBase {
     const base64 = String(args?.base64 ?? '')
     if (!name || !base64) throw httpError(400, 'requires name and base64')
     if (args.sessionId !== undefined && (typeof args.sessionId !== "string" || !args.sessionId.trim())) throw httpError(400, "sessionId must be a nonempty string")
+    // The raw webServer route supplies no caller-to-session ownership proof. This only selects a namespace;
+    // deployments must restrict this route to trusted operators, including legacy uploads without sessionId.
     return copyIntoManagedFile(this.host.dataDir, { name, base64, ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId as string }) })
   }
 }

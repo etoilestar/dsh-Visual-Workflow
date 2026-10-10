@@ -24,6 +24,7 @@ import { VisualWorkflowApi, type ApiHost } from '../../../../src/host/api/index.
 import { stageLabel } from '../../../../src/host/graph/index.js'
 import type { DatabaseNode, RoleNode, StageNode, WorkflowDocument } from '../../../../src/host/shared/graph-model.js'
 import type { EmbeddingEngine } from '../../../../src/host/embedding/engine.js'
+import type { SessionInputFile } from "../../../../src/host/shared/runtime-types.js"
 import type {
   AssetVersionEntry,
   ExperienceEntry,
@@ -174,6 +175,7 @@ export interface Harness {
 }
 
 export interface HarnessOptions {
+  sessionInputFiles?: (sessionId: string) => Promise<SessionInputFile[]>
   /** 编排配置覆盖（既有用例传 Partial<OrchestratorConfig> 的写法保持可用）。 */
   config?: Partial<OrchestratorConfig>
   /** 资产库能力缝注入（伪资产库；缺省不装配，用于 501 路径）。 */
@@ -654,6 +656,7 @@ export async function makeHarness(options?: HarnessOptions): Promise<Harness> {
   const runner = new FakeRunner()
   const runSeq = { n: 0 }
   const runtime = new OrchestratorRuntime({
+    sessionInputFiles: options?.sessionInputFiles,
     store,
     runner,
     agents,

@@ -5,8 +5,34 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanupAll, makeHarness } from './fixtures/api-harness.js'
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
+import { runtimeManagedPrefix } from "../../../src/host/storage/managed-files.js"
+import { runtimeInputsOf } from "../../../src/host/orchestrator/runtime-inputs.js"
+import { makeFlow } from "./fixtures/api-harness.js"
 
 afterEach(cleanupAll)
+
+it("test_session_upload_namespace_binding_and_legacy_template_upload_remain_compatible", async () => {
+  const h = await makeHarness()
+  const args = { name: "source.txt", base64: Buffer.from("data").toString("base64") }
+  const uploaded = await h.api.handle("fileUpload", { ...args, sessionId: "session-1" }) as { managedPath: string; fileName: string }
+  expect(uploaded.fileName).toBe(`${runtimeManagedPrefix("session-1")}source.txt`)
+  const raw = { nodeInputs: { "n-a1": { source: [{ kind: "file", fileRef: { source: "managed", path: uploaded.managedPath } }] } } }
+  const access = { sessionId: "session-1", managedRoot: h.dataDir, files: [] }
+  expect((await runtimeInputsOf(raw, makeFlow(), access)).nodeInputs["n-a1"].source[0]).toMatchObject({ fileRef: { path: join(h.dataDir, uploaded.managedPath) } })
+  await expect(runtimeInputsOf(raw, makeFlow(), { ...access, sessionId: "other" })).rejects.toMatchObject({ code: "WF_INPUT_FILE_UNAUTHORIZED" })
+  await expect(h.api.handle("fileUpload", { ...args, name: uploaded.fileName })).rejects.toMatchObject({ code: "WF_INPUT_FILE_UNAUTHORIZED" })
+  expect(await readFile(join(h.dataDir, uploaded.managedPath), "utf8")).toBe("data")
+  const legacy = await h.api.handle("fileUpload", args) as { managedPath: string; fileName: string }
+  expect(legacy).toEqual({ managedPath: "data/files/source.txt", fileName: "source.txt" })
+  expect(await readFile(join(h.dataDir, legacy.managedPath), "utf8")).toBe("data")
+})
+
+it.each(["", " ", 1, null])("test_upload_invalid_session_identifier_%j_is_rejected", async (sessionId) => {
+  const h = await makeHarness()
+  await expect(h.api.handle("fileUpload", { sessionId, name: "file.txt", base64: "ZGF0YQ==" })).rejects.toMatchObject({ status: 400 })
+})
 
 describe('模板端点（角色/文件/数据库）', () => {
   it('模板 CRUD 与删除预览（解耦语义：受影响节点恒为 0）', async () => {

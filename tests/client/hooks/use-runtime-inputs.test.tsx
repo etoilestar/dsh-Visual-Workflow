@@ -2,7 +2,7 @@
 import { act, useEffect } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, expect, it, vi } from "vitest"
-import { useRuntimeInputs, type RuntimeInputSelection } from "../../../src/client/hooks/use-runtime-inputs.js"
+import { formInputValue, useRuntimeInputs, type PrepareRuntimeInputs } from "../../../src/client/hooks/use-runtime-inputs.js"
 import { useRunControl } from "../../../src/client/hooks/useRunControl.js"
 import { zh } from "../../../src/client/i18n.js"
 import { EP } from "../../../src/client/lib/remote.js"
@@ -13,7 +13,7 @@ import type { RuntimeInputOptions } from "../../../src/host/shared/runtime-types
 let root: Root | undefined
 let container: HTMLDivElement | undefined
 let face!: { inputs: ReturnType<typeof useRuntimeInputs>; control: ReturnType<typeof useRunControl> }
-const options: RuntimeInputOptions = { nodeInputs: { workflow: {}, first: {} }, files: [{ attachmentId: "att", name: "data.csv", bytes: 4, path: "/host/data.csv" }], handoffPolicy: "explicit" }
+const options: RuntimeInputOptions = { nodeInputs: { workflow: {}, first: {} }, files: [{ attachmentId: "att", name: "data.csv", bytes: 4 }], handoffPolicy: "explicit" }
 const checkpoint = { id: "run", flowId: "flow", inputRevision: 3, handoffPolicy: "auto", runtimeInputs: { workflowInputs: { subject: [{ kind: "text", value: "saved" }] }, nodeInputs: { first: { old: [{ kind: "json", value: { count: 2 } }] } } }, nodes: [{ nodeId: "first", status: "pending", attempts: 0 }, { nodeId: "workflow", status: "running", attempts: 1 }] }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done }); return { promise, resolve } }
 async function render(remote: RemoteFace, owner = "session:flow", dispatch = vi.fn()) {
@@ -33,17 +33,86 @@ function remoteOf(extra: (endpoint: string, args: unknown) => unknown = () => nu
   return { call: vi.fn(async (endpoint: string, args: unknown) => endpoint === EP.EP_RUNTIME_INPUT_OPTIONS ? structuredClone(options) : endpoint === EP.EP_RUN_STATUS ? structuredClone(checkpoint) : extra(endpoint, args)) } as unknown as RemoteFace
 }
 async function prepare(runId?: string, binding = false) {
-  let pending!: Promise<RuntimeInputSelection | null>
+  let pending!: ReturnType<PrepareRuntimeInputs>
   await act(async () => { pending = face.inputs.prepare("session", "flow", runId, binding) })
   return { pending }
 }
 afterEach(async () => { await act(async () => { root?.unmount() }); root = undefined; container?.remove(); vi.restoreAllMocks() })
 
+it("test_legacy_normal_run_skips_dialog_and_preserves_original_request", async () => {
+  const remote = remoteOf(() => ({ runId: "started" }))
+  await render(remote)
+  await act(async () => { expect(await face.control.startRun("session", "flow")).toBe("started") })
+  expect(face.inputs.dialog).toBeNull()
+  expect(vi.mocked(remote.call).mock.calls.find(([name]) => name === EP.EP_RUN)?.[1]).toEqual({ sessionId: "session", flowId: "flow" })
+})
+
+it("test_normal_run_collects_missing_required_input_before_dispatch", async () => {
+  const remote = remoteOf(() => ({ runId: "started" }))
+  vi.mocked(remote.call).mockImplementationOnce(async () => ({ ...options, nodeInputs: { first: { source: { kind: "text", required: true } } } }))
+  await render(remote)
+  let started!: Promise<string | null>
+  await act(async () => { started = face.control.startRun("session", "flow") })
+  expect(face.inputs.dialog?.eligibleNodes).toEqual(["first"])
+  expect(vi.mocked(remote.call).mock.calls.some(([name]) => name === EP.EP_RUN)).toBe(false)
+  await act(async () => { face.inputs.add("node:first", "source", "text", "required"); await face.inputs.submit() })
+  expect(await started).toBe("started")
+  expect(vi.mocked(remote.call).mock.calls.find(([name]) => name === EP.EP_RUN)?.[1]).toMatchObject({ runtimeInputs: { nodeInputs: { first: { source: [{ kind: "text", value: "required" }] } } } })
+})
+
+it("test_optional_configuration_can_enable_auto_without_required_inputs", async () => {
+  const remote = remoteOf(() => ({ runId: "started" }))
+  await render(remote)
+  let started!: Promise<string | null>
+  await act(async () => { started = face.control.startRun("session", "flow", true) })
+  expect(face.inputs.dialog?.handoffPolicy).toBe("explicit")
+  await act(async () => { face.inputs.change({ handoffPolicy: "auto" }); await face.inputs.submit() })
+  expect(await started).toBe("started")
+  expect(vi.mocked(remote.call).mock.calls.find(([name]) => name === EP.EP_RUN)?.[1]).toMatchObject({ handoffPolicy: "auto" })
+})
+
+it("test_cancel_configuration_never_starts_run", async () => {
+  const remote = remoteOf(() => ({ runId: "unexpected" }))
+  await render(remote)
+  let started!: Promise<string | null>
+  await act(async () => { started = face.control.startRun("session", "flow", true) })
+  await act(async () => { face.inputs.cancel() })
+  expect(await started).toBeNull()
+  expect(vi.mocked(remote.call).mock.calls.some(([name]) => name === EP.EP_RUN)).toBe(false)
+})
+
+it("test_normal_resume_restores_checkpoint_inputs_and_auto_without_dialog", async () => {
+  await render(remoteOf())
+  let selection!: Awaited<ReturnType<PrepareRuntimeInputs>>
+  await act(async () => { selection = await face.inputs.prepare("session", "flow", "run", false, false) })
+  expect(face.inputs.dialog).toBeNull()
+  expect(selection).toMatchObject({ runtimeInputs: checkpoint.runtimeInputs, handoffPolicy: "auto" })
+})
+
+it("test_client_attachment_submission_projects_only_public_reference", () => {
+  const file = { attachmentId: "att", name: "data.csv", bytes: 4, path: "/unexpected/host/path" }
+  expect(formInputValue("attachment", "att", [file])).toEqual({ kind: "file", fileRef: { source: "attachment", attachmentId: "att", name: "data.csv", bytes: 4 } })
+})
+
+it("test_document_switch_during_normal_options_lookup_never_starts_old_run", async () => {
+  const gate = deferred<RuntimeInputOptions>()
+  const remote = remoteOf(() => ({ runId: "unexpected" }))
+  vi.mocked(remote.call).mockImplementationOnce(() => gate.promise)
+  const { rerender, dispatch } = await render(remote)
+  let started!: Promise<string | null>
+  await act(async () => { started = face.control.startRun("session", "flow") })
+  await rerender("session:other")
+  await act(async () => { gate.resolve(options) })
+  expect(await started).toBeNull()
+  expect(dispatch).not.toHaveBeenCalled()
+  expect(vi.mocked(remote.call).mock.calls.some(([name]) => name === EP.EP_RUN)).toBe(false)
+})
+
 it("test_start_legacy_no_required_input_accepts_empty_dialog", async () => {
   const remote = remoteOf(() => ({ runId: "started" }))
   await render(remote)
   let started!: Promise<string | null>
-  await act(async () => { started = face.control.startRun("session", "flow") })
+  await act(async () => { started = face.control.startRun("session", "flow", true) })
   await act(async () => { await face.inputs.submit() })
   expect(await started).toBe("started")
   expect(vi.mocked(remote.call).mock.calls.find(([name]) => name === EP.EP_RUN)?.[1]).toMatchObject({ runtimeInputs: { workflowInputs: {}, nodeInputs: {} } })
@@ -53,7 +122,7 @@ it("test_start_typed_inputs_and_policy_are_sent_without_ui_generation", async ()
   const remote = remoteOf(() => ({ runId: "started", sessionId: "session" }))
   const { dispatch } = await render(remote)
   let started!: Promise<string | null>
-  await act(async () => { started = face.control.startRun("session", "flow") })
+  await act(async () => { started = face.control.startRun("session", "flow", true) })
   await act(async () => { face.inputs.add("workflow", "subject", "text", "topic"); face.inputs.add("node:workflow", "payload", "json", '{"ok":true}'); face.inputs.change({ handoffPolicy: "auto" }) })
   await act(async () => { await face.inputs.submit(); await started })
   expect(vi.mocked(remote.call).mock.calls.find(([name]) => name === EP.EP_RUN)?.[1]).toEqual({ sessionId: "session", flowId: "flow", handoffPolicy: "auto", runtimeInputs: { workflowInputs: { subject: [{ kind: "text", value: "topic" }] }, nodeInputs: { workflow: { payload: [{ kind: "json", value: { ok: true } }] } } } })
@@ -75,7 +144,7 @@ it("test_bind_pending_node_sends_exact_revision_and_node_slots", async () => {
   expect(face.inputs.dialog?.eligibleNodes).toEqual(["first"])
   await act(async () => { face.inputs.add("node:first", "data", "attachment", "att") })
   await act(async () => { await face.inputs.submit() })
-  expect(vi.mocked(remote.call).mock.calls.find(([name]) => name === EP.EP_RUN_INPUT_BIND)?.[1]).toEqual({ sessionId: "session", runId: "run", nodeId: "first", expectedRevision: 3, inputs: { old: [{ kind: "json", value: { count: 2 } }], data: [{ kind: "file", fileRef: { source: "attachment", attachmentId: "att", name: "data.csv", bytes: 4, path: "/host/data.csv" } }] } })
+  expect(vi.mocked(remote.call).mock.calls.find(([name]) => name === EP.EP_RUN_INPUT_BIND)?.[1]).toEqual({ sessionId: "session", runId: "run", nodeId: "first", expectedRevision: 3, inputs: { old: [{ kind: "json", value: { count: 2 } }], data: [{ kind: "file", fileRef: { source: "attachment", attachmentId: "att", name: "data.csv", bytes: 4 } }] } })
   expect((await pending)?.runtimeInputs.nodeInputs.first.data?.[0]).toMatchObject({ kind: "file" })
 })
 
@@ -137,7 +206,7 @@ it("test_late_start_response_after_document_change_does_not_patch_new_document",
   const gate = deferred<{ runId: string }>()
   const { rerender, dispatch } = await render(remoteOf(() => gate.promise))
   let pending!: Promise<string | null>
-  await act(async () => { pending = face.control.startRun("session", "flow") })
+  await act(async () => { pending = face.control.startRun("session", "flow", true) })
   await act(async () => { face.inputs.add("workflow", "subject", "text", "topic"); await face.inputs.submit() })
   await rerender("session:other")
   gate.resolve({ runId: "old" })
@@ -148,7 +217,7 @@ it("test_late_start_response_after_document_change_does_not_patch_new_document",
 it("test_unmount_during_input_options_ignores_late_result", async () => {
   const gate = deferred<RuntimeInputOptions>()
   await render({ call: vi.fn(() => gate.promise) } as unknown as RemoteFace)
-  let pending!: Promise<RuntimeInputSelection | null>
+  let pending!: ReturnType<PrepareRuntimeInputs>
   await act(async () => { pending = face.inputs.prepare("session", "flow") })
   await act(async () => { root!.unmount() }); root = undefined
   gate.resolve(options)

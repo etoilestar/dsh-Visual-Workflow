@@ -2,10 +2,12 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | {
     [key: string]: JsonValue;
 };
 export type HandoffPolicy = "explicit" | "auto";
-export interface SessionInputFile {
+export interface InputAttachmentRef {
     attachmentId: string;
     name: string;
     bytes: number;
+}
+export interface SessionInputFile extends InputAttachmentRef {
     path: string;
 }
 export type RuntimeFileRef = {
@@ -13,7 +15,9 @@ export type RuntimeFileRef = {
     path: string;
 } | ({
     source: "attachment";
-} & SessionInputFile) | {
+} & InputAttachmentRef & {
+    path?: string;
+}) | {
     source: "node";
     path: string;
 };
@@ -46,7 +50,7 @@ export interface InputRequirement {
 }
 export interface RuntimeInputOptions {
     nodeInputs: Record<string, Record<string, InputRequirement>>;
-    files: SessionInputFile[];
+    files: InputAttachmentRef[];
     handoffPolicy: HandoffPolicy;
     checkpoint?: {
         runId: string;
