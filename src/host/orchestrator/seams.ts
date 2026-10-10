@@ -189,6 +189,8 @@ export type TurnEndInfo = { kind: 'error'; error: unknown } | { kind: 'aborted' 
 
 /** 父代理侧宿主能力（会话根 Agent 服务；index.ts 的 CordisAgentHost 实现）。 */
 export interface AgentHost {
+  cancelRoot?(sessionId: string, reason: string): void
+  tokenUsageSince?(agentId: string, afterMs: number): { total: number; complete: boolean; observed: boolean } | null
   /** agents 服务是否可用。 */
   available(): boolean
   /** 取会话根 Agent；未激活返回 null。 */

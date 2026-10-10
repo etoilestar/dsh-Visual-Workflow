@@ -63,7 +63,7 @@ describe('watchdog 看护与陈旧记录对账', () => {
     expect((await h.store.getRun('run-1'))?.status).toBe('stopped')
   })
 
-  it('inflight 保护：子代理在跑不计空闲；已消失自愈后按空闲终止', async () => {
+  it("test_inflight_child_liveness_missing_requires_settlement_before_idle_release", async () => {
     const h = await makeHarness()
     const { entry } = await start(h, makeFlow())
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
@@ -72,9 +72,11 @@ describe('watchdog 看护与陈旧记录对账', () => {
     await sweepWatchdogOnce(h.runtime)
     expect(entry.snapshot.status).toBe('running') // 在跑：不判空闲
 
-    h.agents.runningChildren.delete('child-1') // 会话已消失 → 自愈清 inflight（刷新 lastActiveAt）
+    h.agents.runningChildren.delete("child-1")
     await sweepWatchdogOnce(h.runtime)
-    expect(entry.inflight.size).toBe(0)
+    expect(entry.inflight.size).toBe(1)
+    await expect(h.runtime.wfRunNode({ isChild: false, sessionId: "session-1" }, { nodeId: "n-a1" })).rejects.toMatchObject({ code: "WF_BUSY" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
     expect(entry.snapshot.status).toBe('running') // 自愈当轮刷新活动时间，不立即判空闲
 
     h.clock.now += 600 // 超过 idleTimeoutMs → 下一轮扫描终止

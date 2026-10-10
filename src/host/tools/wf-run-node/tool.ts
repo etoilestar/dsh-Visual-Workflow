@@ -1,3 +1,4 @@
+import { workflowToolError } from "../infrastructure/workflow-tool-error.js"
 // src/host/tools/wf-run-node/tool.ts
 //
 // wf_run_node 工具注册（模式一编排执行：仅异步非阻塞启动，不提供 wait 参数）。
@@ -71,7 +72,7 @@ export function registerWfRunNode(
       },
       render: textRender,
     },
-    execute: (args, exec) => host.orchestrator.wfRunNode(callerOf(exec), args ?? {}, exec.signal, { expectedMode: 'mode1' }),
+    execute: (args, exec) => host.orchestrator.wfRunNode(callerOf(exec), args ?? {}, exec.signal, { expectedMode: 'mode1' }).catch(workflowToolError),
   })
 
   const dispose = tools.register(definition)

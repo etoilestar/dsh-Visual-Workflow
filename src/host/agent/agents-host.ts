@@ -9,6 +9,7 @@ import type { AgentHost, RootAgentLike, RootInjectedMessage, TurnEndInfo } from 
 import type { FlowStore } from '../storage/flow-store.js'
 import type { AgentsServiceLike, SubagentsServiceLike } from './runner.js'
 import type { SessionInputFile } from "../shared/runtime-types.js"
+import { sessionTokenAccounting, type TokenAccounting } from "./token-accounting.js"
 
 // ---------------------------------------------------------------------------
 // 会话事件流读取
@@ -74,6 +75,17 @@ export class CordisAgentHost implements AgentHost {
 
   available(): boolean {
     return this.agentsService() !== null
+  }
+
+  cancelRoot(sessionId: string, reason: string): void {
+    const root = this.getRootAgent(sessionId) as { cancel?: (cause: { kind: "hook"; reason: string }, options: { keepInbox: boolean }) => void } | null
+    if (typeof root?.cancel !== "function") throw new Error("宿主未提供公开 Agent.cancel")
+    root.cancel({ kind: "hook", reason }, { keepInbox: true })
+  }
+
+  tokenUsageSince(agentId: string, afterMs: number): TokenAccounting | null {
+    const agent = this.getRootAgent(agentId)
+    return agent ? sessionTokenAccounting(agent.session, afterMs) : null
   }
 
   getRootAgent(sessionId: string): RootAgentLike | null {

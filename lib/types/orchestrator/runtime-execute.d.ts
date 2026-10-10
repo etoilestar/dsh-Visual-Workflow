@@ -1,7 +1,8 @@
-import { type FinishArgs, type FinishResult, type RunNodeArgs, type RunNodeResult } from './run-entry.js';
+import { type FinishArgs, type FinishResult, type RunEntry, type RunNodeArgs, type RunNodeResult } from './run-entry.js';
 import { type CallerInfo } from './seams.js';
 import { RuntimeLaunch } from './runtime-launch.js';
 export declare class RuntimeExecute extends RuntimeLaunch {
+    protected assertNodeBudget(run: RunEntry, count?: number): void;
     /** 校验调用者为「当前会话根 Agent」并取可直接执行节点的激活运行（必要时自动续跑）。 */
     private requireRootRun;
     /**

@@ -10,3 +10,5 @@ export { registerWfExperience, type WfExperienceHost } from './wf-experience/too
 export { buildIndexForDatabase, ensureDatabaseIndexes, indexPathOf } from './wf-db-query/service.js';
 export { createDatabaseDriver, testDatabaseConnection } from './wf-db-query/driver.js';
 export { registerToolSwitchFilter, ToolSwitchStore } from './infrastructure/tool-switches.js';
+export { registerParentToolBoundary } from "./infrastructure/parent-tool-boundary.js";
+export type { ParentToolExecution, ParentToolDecision } from "./infrastructure/parent-tool-boundary.js";

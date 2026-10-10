@@ -8,6 +8,17 @@ export interface RunEntry {
     inputBinding?: boolean;
     inputBindingDone?: Promise<void>;
     parentSettlementDone?: Promise<void>;
+    repeatedFailure?: {
+        key: string;
+        count: number;
+    };
+    tokenBase?: number;
+    tokenMeters?: Map<string, {
+        total: number;
+        complete: boolean;
+        observed: boolean;
+    }>;
+    terminationDone?: Promise<boolean>;
     /** 运行级取消控制器（停止/终止/插件卸载时 abort；阻塞中的 wait/提问随之取消）。 */
     controller: AbortController;
     /** 运行快照（状态机事实源；持久化副本经 store.saveRun）。 */

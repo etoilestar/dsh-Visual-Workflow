@@ -22,6 +22,10 @@ import { executionOf, preflightNodeInputs } from "./execution-inputs.js"
 import { assertInvocationCurrent, resolveNodeDependencies } from "./dependency-resolution.js"
 
 export class RuntimeExecute extends RuntimeLaunch {
+  protected assertNodeBudget(run: RunEntry, count = 1): void {
+    const usage = run.snapshot.usage ??= { parentCalls: 0, nodeExecutions: 0, tokens: 0, tokenAccounting: "unavailable" }
+    if (run.snapshot.budget?.nodeExecutionLimit !== undefined && usage.nodeExecutions + count > run.snapshot.budget.nodeExecutionLimit) throw new WfError("节点执行预算耗尽", "WF_NODE_EXECUTION_LIMIT", { retryable: false })
+  }
   // ---- wf_run_node ----------------------------------------------------------
 
   /** 校验调用者为「当前会话根 Agent」并取可直接执行节点的激活运行（必要时自动续跑）。 */
@@ -69,7 +73,7 @@ export class RuntimeExecute extends RuntimeLaunch {
       )
     }
     const nodeId = String(args?.nodeId ?? '').trim()
-    if (!nodeId) throw new WfError('wf_run_node 需要参数 nodeId', 'WF_BAD_ARGS')
+    if (!nodeId) throw new WfError("wf_run_node 需要参数 nodeId", "WF_BAD_ARGS", { retryable: false, details: [{ field: "nodeId", message: "需要非空节点 ID" }] })
     if (run.controller.signal.aborted) throw new WfError('该工作流已停止', 'WF_CANCELLED')
     if (run.inputBinding) throw new WfError("输入正在绑定，请完成后再派发", "WF_BUSY")
 
@@ -192,8 +196,10 @@ export class RuntimeExecute extends RuntimeLaunch {
 
     assertActive()
     assertInvocationCurrent(run.snapshot, resolved.invocation)
+    this.assertNodeBudget(run)
     run.callCount += 1
     run.attempts.set(resolvedNodeId, attempt)
+    run.snapshot.usage!.nodeExecutions += 1
     run.lastActiveAt = this.now()
     setNodeStatus(run.snapshot, resolvedNodeId, 'running', { attempts: attempt, now: this.now(), provider: node.data.provider || run.snapshot.parentRoute?.provider, model: node.data.model || run.snapshot.parentRoute?.model })
     const dispatched = run.snapshot.nodes.find((record) => record.nodeId === resolvedNodeId)!
@@ -400,6 +406,7 @@ export class RuntimeExecute extends RuntimeLaunch {
 
     assertActive()
     for (const plan of plans) assertInvocationCurrent(run.snapshot, plan.invocation!)
+    this.assertNodeBudget(run, plans.length)
     run.callCount += 1
     run.attempts.set(groupId, attempt)
     run.lastActiveAt = this.now()
@@ -415,7 +422,9 @@ export class RuntimeExecute extends RuntimeLaunch {
       if (attempted.has(nodeId)) return
       attempted.add(nodeId)
       const count = plan.invocation!.attempt
+      this.assertNodeBudget(run)
       run.attempts.set(nodeId, count)
+      run.snapshot.usage!.nodeExecutions += 1
       const member = plan.node
       setNodeStatus(run.snapshot, nodeId, "running", { attempts: count, now: this.now(), provider: member.data.provider || run.snapshot.parentRoute?.provider, model: member.data.model || run.snapshot.parentRoute?.model })
       const record = run.snapshot.nodes.find((record) => record.nodeId === nodeId)!
@@ -557,6 +566,7 @@ export class RuntimeExecute extends RuntimeLaunch {
     snapshot.termination = { source: "parent_finish", stopReason: isFailed ? "failed" : "completed", ...(isFailed ? { failure: failureOf({ message: snapshot.summary }, "run_finish", "WF_PARENT_FINISH_FAILED", this.now()) } : {}) }
     this.log().info(JSON.stringify({ runId: snapshot.id, phase: "run_finish", status: snapshot.status, source: "parent_finish", errorCode: snapshot.termination.failure?.code }))
     terminalizeNodes(snapshot, this.now(), isFailed ? 'fail' : 'completed')
+    this.traceRuntime(snapshot, isFailed ? "run_failed" : "run_completed", snapshot.status, { errorCode: snapshot.termination.failure?.code })
     await this.persistWarn(run)
     // 终态写盘之后、释放内存条目之前：向父代理注入复盘指令（best-effort，失败只告警）
     this.notifyRunReflection(run, '[visual-workflow] 复盘指令注入：')

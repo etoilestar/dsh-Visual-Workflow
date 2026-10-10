@@ -132,6 +132,10 @@ export class FakeRoot implements RootAgentLike {
 
 /** AgentHost fake：available/根 Agent/注入/回合终态/子代理存活全部可控。 */
 export class FakeAgents implements AgentHost {
+  cancellations: Array<{ sessionId: string; reason: string }> = []
+  tokenAccounting: (id: string, afterMs: number) => { total: number; complete: boolean; observed: boolean } | null = () => null
+  cancelRoot(sessionId: string, reason: string): void { this.cancellations.push({ sessionId, reason }) }
+  tokenUsageSince(id: string, afterMs: number): { total: number; complete: boolean; observed: boolean } | null { return this.tokenAccounting(id, afterMs) }
   roots = new Map<string, FakeRoot>()
   availableFlag = true
   turnEnd: TurnEndInfo | null = null

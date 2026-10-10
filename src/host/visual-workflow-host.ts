@@ -46,6 +46,7 @@ import {
   registerWfOrgCatalog,
   registerWfRunNode,
   registerWfRunNodeWait,
+  registerParentToolBoundary,
   type GraphPatchHost,
   type OrgCatalogHost,
 } from './tools/index.js'
@@ -506,6 +507,7 @@ export class VisualWorkflowHost extends Service {
     //     干活」翻译成「运行不空闲」。子代理转 running 不触发本路径（会话 id 不是
     //     父代理会话，touchRunForSession 内部按会话+status 精确匹配）。
     // ctx.on 随本 fiber 自动反注册，无需手动 removeListener。
+    this.ctx.effect(() => registerParentToolBoundary(this.ctx, this.orchestrator))
     this.ctx.on("subagent/start", (payload) => {
       const info = payload as { id?: unknown; runId?: unknown }
       const childId = typeof info?.id === "string" ? info.id : ""

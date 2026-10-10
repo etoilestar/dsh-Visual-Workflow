@@ -301,6 +301,8 @@ export class RuntimeLaunch extends RuntimeInputManager {
     await this.persistWarn(entry)
 
     // 释放同工作流的旧 paused 内存条目（磁盘历史保留；锁随新 run 接管）
+    this.traceRuntime(snapshot, "run_started", "resumed")
+    await this.persistWarn(entry)
     for (const [oldId, oldEntry] of [...this.runs]) {
       const old = oldEntry.snapshot
       if (oldId !== runId && old.sessionId === sessionId && old.flowId === flowId && old.status === 'paused') {

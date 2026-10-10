@@ -182,9 +182,11 @@ describe('wfRunNode 异步路径与护栏', () => {
     entry.callCount = GLOBAL_RUN_CALL_LIMIT
     await expect(h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })).rejects.toMatchObject({ code: 'WF_GLOBAL_LIMIT' })
 
-    entry.callCount = 0
-    entry.attempts.set('n-a1', 4) // retryLimit 3 → 最多 4 次
-    await expect(h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })).rejects.toMatchObject({ code: 'WF_RETRY_LIMIT' })
+    expect(h.runtime.flowLockInfo("flow-1")).toBeNull()
+    const retry = await makeHarness()
+    const { entry: retryEntry } = await start(retry, makeFlow())
+    retryEntry.attempts.set("n-a1", 4)
+    await expect(retry.runtime.wfRunNode(caller, { nodeId: "n-a1" })).rejects.toMatchObject({ code: "WF_RETRY_LIMIT" })
   })
 
   it('子代理启动失败：抛原错误且节点标记 fail', async () => {

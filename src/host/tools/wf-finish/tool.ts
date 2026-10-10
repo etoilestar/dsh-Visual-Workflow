@@ -1,3 +1,4 @@
+import { workflowToolError } from "../infrastructure/workflow-tool-error.js"
 // src/host/tools/wf-finish/tool.ts
 //
 // wf_finish 工具注册（编排收尾：终态化 + 落记录 + 释放运行锁）。
@@ -52,7 +53,7 @@ export function registerWfFinish(
       },
       render: textRender,
     },
-    execute: (args, exec) => host.orchestrator.wfFinish(callerOf(exec), args ?? {}),
+    execute: (args, exec) => host.orchestrator.wfFinish(callerOf(exec), args ?? {}).catch(workflowToolError),
   })
 
   const dispose = tools.register(definition)

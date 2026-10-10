@@ -90,14 +90,14 @@ export interface OrchestrationDirectiveParams {
  */
 export const ORCH_HARD_CONSTRAINTS = {
   /** 父代理「仅调度不执行」核心短语（情况1 首段 + 末段重申双位）。 */
-  dispatchOnly: "仅编排：你只负责调度子代理，不亲自执行节点任务；不得用 Bash、Glob 等工具替 load_data 查找或处理 CSV",
+  dispatchOnly: "仅编排：选择可执行节点、判断已结算结果、选择条件路径和合法重试；节点业务由子代理执行。输入通过宿主运行输入界面绑定，不用原生消息工具或图修改接口代替调度和绑定",
   /**
    * 节点完成判定（双重汇报防治，一句话）：子代理主动 report ≠ 完成；
    * 只有 DSH 自动送达的结算通知才是节点完成的权威信号。
    */
   nodeSettledSignal:
-    "节点判定：收到结算通知（Background subagent … finished …）后，仍须依据运行快照的结算状态与声明产物判断业务完成；请求上传 CSV 或回复文件路径不等于成功",
-  inputBindings: "输入缺失：报告具体节点与缺少的文件绑定，不启动该节点或下游；通过宿主允许的用户交互工具索取输入，wf_ask 仅供子代理通信；附件上传后需明确完成 Workflow 文件绑定并启动新运行，不能猜测或自行搜索 CSV",
+    "节点判定：收到结算通知后，依据运行快照的 NodeResult、完成确认和输出契约判断；索要输入或声称保存产物不等于契约验证通过。auto/strict 条件入线必须通过 selectedEdgeIds 明确选择",
+  inputBindings: "输入缺失：报告节点、输入槽和稳定错误码，通过宿主交互请求用户补充；未派发节点可在工作台绑定后再次调度。附件上传不等于绑定，不搜索或猜测路径；连续失败按字段诊断修正，不能无限猜参数",
   safeTermination: "无法安全继续时调用 wf_finish，status 为 failed，释放运行锁；不得无限重试或自行声称节点成功；沙箱后端故障按真实原因报告，不绕过工具守卫或沙箱",
   /** 收尾协议：wf_finish 幂等收尾、释放锁。 */
   finishIdempotent: '收尾时调用 wf_finish （只调用一次，幂等，释放运行锁）',
