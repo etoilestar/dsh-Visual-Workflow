@@ -24,6 +24,7 @@ import type { PendingAsk } from './ask-protocol.js'
 export interface RunEntry {
   inputBinding?: boolean
   inputBindingDone?: Promise<void>
+  parentSettlementDone?: Promise<void>
   /** 运行级取消控制器（停止/终止/插件卸载时 abort；阻塞中的 wait/提问随之取消）。 */
   controller: AbortController
   /** 运行快照（状态机事实源；持久化副本经 store.saveRun）。 */

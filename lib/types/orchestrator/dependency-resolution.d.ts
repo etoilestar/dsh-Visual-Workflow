@@ -7,5 +7,5 @@ export interface ResolvedDependencies {
     controlSources: string[];
 }
 /** Resolve only current settled results; branch selection is supplied by the coordinator, never guessed. */
-export declare function resolveNodeDependencies(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, selectedEdgeIds?: string[]): ResolvedDependencies;
+export declare function resolveNodeDependencies(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, selection?: unknown): ResolvedDependencies;
 export declare function assertInvocationCurrent(snapshot: RunSnapshot, invocation: NodeInvocation): void;

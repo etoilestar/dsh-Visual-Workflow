@@ -1,4 +1,5 @@
 import type { RuntimeInputs, HandoffPolicy, RuntimeEvent, RuntimeBudget, VerifiedArtifact, NodeResult, NodeInvocation } from "./runtime-types.js";
+import type { NodeExecutionContract } from "./graph-model.js";
 import type { OrgMeta } from './org-meta.js';
 /** run 运行状态：运行/暂停/完成/失败/停止/中断（架构文档 §4.3 状态机 + §6.1）。 */
 export type RunStatus = 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted';
@@ -96,6 +97,7 @@ export interface RunSnapshot {
         artifacts?: VerifiedArtifact[];
         result?: NodeResult;
         invocation?: NodeInvocation;
+        executionContract?: NodeExecutionContract;
         /** 回合明细（可续跑节点每次被唤醒执行为一回合；P0-2）。 */
         turns?: Array<{
             /** 回合开始时间。 */

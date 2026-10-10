@@ -2,7 +2,8 @@ import { constants } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { ctxInEdges, nodeById, parseExecutionContract } from '../graph/index.js'
-import type { FileNode, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
+import type { FileNode, Line, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
+import type { NodeInvocation, SessionInputFile } from "../shared/runtime-types.js"
 import type { RunSnapshot } from '../shared/types.js'
 import { WfError } from './errors.js'
 import { authorizedInputPath, authorizedOutputPath, outputSignature } from "./execution-file-access.js"
@@ -65,12 +66,30 @@ export async function prepareRunInputs(flow: WorkflowDocument, snapshot: RunSnap
   if (Object.keys(bindings).length) snapshot.fileBindings = bindings
 }
 
-export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, managedRoot?: string, authorizedFiles?: readonly string[]): Promise<void> {
+export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, managedRoot?: string, authorizedFiles?: readonly string[], invocation?: NodeInvocation, files: readonly SessionInputFile[] = [], contextEdges?: Line[]): Promise<void> {
   const contract = executionOf(node)
-  const edges = ctxInEdges(flow, node.id)
-  if (contract.inputSource === 'ctx' && !edges.length) throw inputError(`节点 ${node.id} 声明 ctx 输入却没有 ctx 连线`, 'WF_INPUT_CONTEXT_MISSING')
+  const edges = contextEdges ?? ctxInEdges(flow, node.id)
+  const hasTyped = Object.values(invocation?.inputs ?? {}).some((values) => values.length)
+  if (contract.inputSource === 'ctx' && !edges.length && !hasTyped) throw inputError(`节点 ${node.id} 声明 ctx 输入却没有 ctx 连线`, 'WF_INPUT_CONTEXT_MISSING')
   if (contract.inputSource === 'workspace' && !snapshot.workingDirectory) throw inputError(`节点 ${node.id} 缺少实际会话工作目录`, 'WF_INPUT_PATH_UNRESOLVED')
-  if (contract.inputSource === 'runtime' && !edges.some((edge) => snapshot.fileBindings?.[edge.source]?.length)) throw inputError(`节点 ${node.id} 缺少连接到该节点的运行期文件绑定`, 'WF_INPUT_FILE_UNBOUND')
+  if (contract.inputSource === 'runtime' && !hasTyped && !edges.some((edge) => snapshot.fileBindings?.[edge.source]?.length)) throw inputError(`节点 ${node.id} 缺少运行期输入绑定`, 'WF_INPUT_FILE_UNBOUND')
+  for (const value of Object.values(invocation?.inputs ?? {}).flat()) {
+    if (value.kind !== "file") continue
+    const ref = value.fileRef
+    if (!ref.path) throw inputError("运行期文件缺少宿主解析路径", "WF_INPUT_FILE_UNBOUND")
+    let canonical: string
+    if (ref.source === "attachment") {
+      const file = files.find((file) => file.attachmentId === ref.attachmentId && file.name === ref.name && file.bytes === ref.bytes)
+      if (!file) throw inputError("附件授权已失效，请重新选择或受控上传", "WF_INPUT_FILE_UNAUTHORIZED")
+      canonical = await authorizedInputPath(file.path, undefined, undefined, [file.path])
+    } else canonical = await authorizedInputPath(ref.path, ref.source === "workspace" ? snapshot.workingDirectory : undefined, ref.source === "managed" ? managedRoot : undefined, authorizedFiles)
+    if (canonical !== ref.path) throw inputError("绑定后的文件路径已经变化，请重新绑定", "WF_INPUT_FILE_UNAUTHORIZED")
+    if (value.origin?.source === "node") {
+      const source = snapshot.nodes.find((record) => record.nodeId === value.origin?.nodeId)
+      const artifact = (source?.result?.artifacts ?? source?.artifacts ?? []).find((artifact) => artifact.path === canonical && (!value.origin?.output || (artifact.name ?? "artifact") === value.origin.output))
+      if (!artifact || artifact.signature && (await outputSignature(canonical))?.signature !== artifact.signature) throw inputError("上游文件产物在结算后发生变化，不能交接", "WF_OUTPUT_FILE_STALE")
+    }
+  }
   for (const edge of edges) {
     const source = nodeById(flow, edge.source)
     const resolved = source?.kind === 'proxy' ? nodeById(flow, source.proxySourceId) : source
@@ -88,7 +107,7 @@ export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode
       }
     } else if (resolved?.kind === 'agent' || resolved?.kind === 'parent' || (resolved?.kind === 'start' && flow.mode === 'mode2')) {
       const record = snapshot.nodes.find((entry) => entry.nodeId === resolved.id)
-      if (contract.inputSource === 'ctx' && (!record || !['ok', 'react-capped', 'armed'].includes(record.status) || !record.output?.trim())) throw inputError(`上游 ctx 产出尚不可用：${resolved.id}`, 'WF_INPUT_CONTEXT_MISSING')
+      if (contract.inputSource === 'ctx' && (!record || !['ok', 'react-capped', 'armed'].includes(record.status) || !record.output?.trim() && !record.result)) throw inputError(`上游 ctx 产出尚不可用：${resolved.id}`, 'WF_INPUT_CONTEXT_MISSING')
       if (record && ["ok", "react-capped", "armed"].includes(record.status) && (resolved.kind === "agent" || resolved.kind === "parent")) {
         try { await verifyNodeArtifacts(resolved, structuredClone(snapshot), Date.now()) } catch (error) {
           // 上游完成时的证据不能代替下游启动时的文件可读性；保留稳定错误码。
@@ -102,7 +121,7 @@ export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode
   }
   await Promise.all((contract.requiredFiles ?? []).map((path) => authorizedInputPath(absoluteInputPath(path, snapshot.workingDirectory), snapshot.workingDirectory, managedRoot, authorizedFiles)))
   const outputBaseline: Record<string, string | null> = {}
-  for (const path of contract.outputFiles ?? []) {
+  for (const { path } of outputPathsOf(node)) {
     const absolute = absoluteInputPath(path, snapshot.workingDirectory)
     const canonical = await authorizedOutputPath(absolute, snapshot.workingDirectory)
     let directory = dirname(absolute)
@@ -126,19 +145,25 @@ export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode
 /** 完成事件的产物检查只认文件系统事实，不根据最终回复中的路径判成功。 */
 export async function verifyNodeArtifacts(node: RoleNode, snapshot: RunSnapshot, now: number): Promise<void> {
   const artifacts: NonNullable<RunSnapshot['nodes'][number]['artifacts']> = []
-  for (const path of executionOf(node).outputFiles ?? []) {
+  for (const { path, name, required } of outputPathsOf(node)) {
     const absolute = absoluteInputPath(path, snapshot.workingDirectory)
     let current: Awaited<ReturnType<typeof outputSignature>>
     try { current = await outputSignature(await authorizedOutputPath(absolute, snapshot.workingDirectory)) } catch (error) {
       throw Object.assign(new WfError(`声明产物无法验证：${absolute}`, error instanceof WfError ? error.code : "WF_OUTPUT_FILE_MISSING"), { phase: "run_finish", retryable: false })
     }
+    if (!current && !required) continue
     if (!current) throw Object.assign(new WfError(`节点声称完成但声明产物不存在或不可读：${absolute}`, "WF_OUTPUT_FILE_MISSING"), { phase: "run_finish", retryable: false })
     const baseline = snapshot.nodes.find((entry) => entry.nodeId === node.id)?.attemptHistory?.at(-1)?.outputBaseline
     if (!baseline || !(absolute in baseline) || baseline[absolute] === current.signature) throw Object.assign(new WfError(`声明产物没有本次尝试的写入证据：${absolute}；已有文件不能替代本次执行，请重新生成`, "WF_OUTPUT_FILE_STALE"), { phase: "run_finish", retryable: false })
-    artifacts.push({ path: absolute, size: current.size, verifiedAt: new Date(now).toISOString() })
+    artifacts.push({ path: absolute, size: current.size, verifiedAt: new Date(now).toISOString(), signature: current.signature, runId: snapshot.id, nodeId: node.id, attempt: snapshot.nodes.find((record) => record.nodeId === node.id)?.attempts, ...(name ? { name } : {}) })
   }
   if (artifacts.length) {
     const record = snapshot.nodes.find((entry) => entry.nodeId === node.id)
     if (record) record.artifacts = artifacts
   }
+}
+
+export function outputPathsOf(node: RoleNode): Array<{ path: string; name?: string; required: boolean }> {
+  const contract = executionOf(node)
+  return [...(contract.outputFiles ?? []).map((path) => ({ path, required: true })), ...Object.entries(contract.outputs ?? {}).filter(([, output]) => output.kind === "file").map(([name, output]) => ({ name, path: output.path!, required: output.required !== false }))]
 }

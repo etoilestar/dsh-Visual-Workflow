@@ -1,4 +1,5 @@
 import type { RuntimeInputs, HandoffPolicy, RuntimeEvent, RuntimeBudget, VerifiedArtifact, NodeResult, NodeInvocation } from "./runtime-types.js"
+import type { NodeExecutionContract } from "./graph-model.js"
 // Host + Client 共享契约：run 运行快照（纯类型，零运行时依赖）。
 //
 // 职责：定义一次 run 的持久化状态形状（runs/<runId>.json）与节点执行记录及其
@@ -117,6 +118,7 @@ export interface RunSnapshot {
     artifacts?: VerifiedArtifact[]
     result?: NodeResult
     invocation?: NodeInvocation
+    executionContract?: NodeExecutionContract
     /** 回合明细（可续跑节点每次被唤醒执行为一回合；P0-2）。 */
     turns?: Array<{
       /** 回合开始时间。 */

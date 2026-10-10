@@ -73,6 +73,7 @@ export interface NodeRunner {
 
 /** 协作组成员启动计划（任务块与节点级参数由编排器组装后传入）。 */
 export interface GroupMemberPlan {
+  invocation?: import("../shared/runtime-types.js").NodeInvocation
   /** 成员角色节点（调用前已解析为真实节点，虚拟节点不适用）。 */
   node: RoleNode
   /** 成员任务块（含协作块；创建路径为首条 prompt，复用路径为派发的消息内容）。 */
@@ -125,6 +126,7 @@ export interface GroupStartResult {
 
 /** 节点任务启动入参（任务块与节点级参数，经子代理引擎透传官方配置）。 */
 export interface NodeStartInput {
+  invocation?: import("../shared/runtime-types.js").NodeInvocation
   /** 派发/重建前重新检查运行状态（暂停可能不触发 AbortSignal）。 */
   assertActive?: () => void
   runId?: string

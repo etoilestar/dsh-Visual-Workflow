@@ -1,4 +1,4 @@
-import { ctxInEdges, isFlowLine, mainNodeIdOf, nodeById } from "../graph/index.js"
+import { ctxInEdges, isFlowLine, mainNodeIdOf, memberGroupId, nodeById } from "../graph/index.js"
 import type { Line, RoleNode, WorkflowDocument } from "../shared/graph-model.js"
 import type { NodeInvocation, RuntimeInputValue } from "../shared/runtime-types.js"
 import type { RunSnapshot } from "../shared/types.js"
@@ -13,12 +13,15 @@ function dependencyError(message: string, code = "WF_DEPENDENCY_UNSATISFIED"): n
 export interface ResolvedDependencies { invocation: NodeInvocation; contextEdges: Line[]; controlSources: string[] }
 
 /** Resolve only current settled results; branch selection is supplied by the coordinator, never guessed. */
-export function resolveNodeDependencies(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, selectedEdgeIds?: string[]): ResolvedDependencies {
+export function resolveNodeDependencies(flow: WorkflowDocument, node: RoleNode, snapshot: RunSnapshot, selection?: unknown): ResolvedDependencies {
+  if (selection !== undefined && (!Array.isArray(selection) || selection.some((id) => typeof id !== "string"))) dependencyError("selectedEdgeIds 必须为字符串数组", "WF_BAD_ARGS")
+  const selectedEdgeIds = selection as string[] | undefined
   const idOf = (id: string): string => mainNodeIdOf(flow, id) ?? id
   const recordOf = (id: string) => snapshot.nodes.find((record) => record.nodeId === idOf(id))
   const policy = snapshot.handoffPolicy ?? flow.runtime?.handoffPolicy ?? "explicit"
   const contract = executionOf(node)
-  const incoming = flow.lines.filter((line) => isFlowLine(line) && idOf(line.target) === node.id)
+  const controlNodeId = memberGroupId(flow, node.id) ?? node.id
+  const incoming = flow.lines.filter((line) => isFlowLine(line) && idOf(line.target) === controlNodeId)
   const conditional = incoming.filter((line) => line.condition)
   if (selectedEdgeIds !== undefined && (!Array.isArray(selectedEdgeIds) || selectedEdgeIds.some((id) => typeof id !== "string" || !conditional.some((line) => line.id === id)) || new Set(selectedEdgeIds).size !== selectedEdgeIds.length)) dependencyError("selectedEdgeIds 必须是本节点条件入线的唯一 ID", "WF_BAD_ARGS")
   if (policy !== "explicit" && conditional.length && selectedEdgeIds === undefined) dependencyError("条件路径尚未选择；请传入 selectedEdgeIds", "WF_HANDOFF_AMBIGUOUS")
@@ -34,7 +37,7 @@ export function resolveNodeDependencies(flow: WorkflowDocument, node: RoleNode, 
     }
   }
   const inactiveSources = new Set(incoming.filter((line) => line.condition && selectedEdgeIds !== undefined && !selectedEdgeIds.includes(line.id)).map((line) => idOf(line.source)).filter((id) => !controlSources.includes(id)))
-  const contextEdges = ctxInEdges(flow, node.id).filter((line) => !inactiveSources.has(idOf(line.source)))
+  const contextEdges = [...ctxInEdges(flow, node.id), ...(controlNodeId === node.id ? [] : ctxInEdges(flow, controlNodeId))].filter((line) => !inactiveSources.has(idOf(line.source)))
   if (policy !== "explicit") for (const source of controlSources) {
     const kind = nodeById(flow, source)?.kind
     if (["agent", "parent", "group"].includes(kind ?? "") && !contextEdges.some((line) => idOf(line.source) === source)) contextEdges.push({ id: `runtime:${source}:${node.id}`, source, target: node.id, sourceHandle: "ctx-out", targetHandle: "ctx-in" })

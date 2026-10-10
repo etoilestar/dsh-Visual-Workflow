@@ -15,6 +15,7 @@ export declare class RuntimeExecute extends RuntimeLaunch {
     wfRunNode(caller: CallerInfo, args: RunNodeArgs, callerSignal?: AbortSignal, options?: {
         expectedMode?: 'mode1' | 'mode2';
     }): Promise<RunNodeResult>;
+    private assertNodeIdle;
     private runAgentNode;
     /**
      * 协作组节点执行：把整组启动为官方 Agent Team。
@@ -36,6 +37,7 @@ export declare class RuntimeExecute extends RuntimeLaunch {
      * @returns started 路径结果（含成员清单；一个组对应多个成员会话，故无单一 childId）。
      */
     private runGroupNode;
+    private runGroupNodeReserved;
     /**
      * wf_finish：父代理收尾信号 → 写完成/失败记录并释放运行锁。幂等。
      * 运行锁降权（用户裁决）：本会话停在 paused/stopped/interrupted 断点时先自动续跑接管

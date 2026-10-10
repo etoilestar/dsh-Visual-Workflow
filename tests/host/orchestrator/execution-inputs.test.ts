@@ -178,7 +178,7 @@ describe('explicit execution inputs and artifacts', () => {
     await start(h, flow)
     await expect(h.runtime.wfRunNode(caller, { nodeId: node.id })).rejects.toMatchObject({ code: 'WF_INPUT_CONTEXT_MISSING' })
     expect(h.runner.calls).toHaveLength(0)
-    expect((await h.store.getRun('run-1'))!.nodes.find((entry) => entry.nodeId === node.id)).toMatchObject({ status: 'fail', attempts: 1, failure: { phase: 'node_input', code: 'WF_INPUT_CONTEXT_MISSING' } })
+    expect((await h.store.getRun('run-1'))!.nodes.find((entry) => entry.nodeId === node.id)).toMatchObject({ status: 'pending', attempts: 0, failure: { phase: 'node_input', code: 'WF_INPUT_CONTEXT_MISSING' } })
   })
 
   it('test_completed_reply_does_not_replace_actual_output_file', async () => {
@@ -255,7 +255,7 @@ describe("输入绑定与业务完成证据", () => {
     await rm(csv)
     await expect(h.runtime.wfRunNode(caller, { nodeId: "n-a1" })).rejects.toMatchObject({ code: "WF_INPUT_FILE_UNAVAILABLE" })
     expect(h.runner.calls).toHaveLength(0)
-    expect(h.runtime.runSnapshot("run-1")!.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "fail", failure: { phase: "node_input", code: "WF_INPUT_FILE_UNAVAILABLE" } })
+    expect(h.runtime.runSnapshot("run-1")!.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "pending", attempts: 0, failure: { phase: "node_input", code: "WF_INPUT_FILE_UNAVAILABLE" } })
   })
 
   it("test_settlement_upload_request_without_artifact_fails_and_blocks_ctx", async () => {

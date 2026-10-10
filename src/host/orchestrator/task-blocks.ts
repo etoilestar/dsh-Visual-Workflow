@@ -9,7 +9,7 @@ import type { Line, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import type { NodeInvocation } from "../shared/runtime-types.js"
 import type { RunSnapshot } from '../shared/types.js'
 import { buildNodeContextFacts, collabBlockOf } from './graph-facts.js'
-import { absoluteInputPath, executionOf } from './execution-inputs.js'
+import { absoluteInputPath, executionOf, outputPathsOf } from "./execution-inputs.js"
 import { resolveNodeDependencies } from "./dependency-resolution.js"
 
 /**
@@ -88,7 +88,7 @@ export function buildNodeBlocks(input: {
       filePaths,
       workingDirectory: input.snapshot.workingDirectory,
       inputSource: execution.inputSource,
-      outputFiles: (execution.outputFiles ?? []).map((path) => absoluteInputPath(path, input.snapshot.workingDirectory)),
+      outputFiles: outputPathsOf(node).map(({ path }) => absoluteInputPath(path, input.snapshot.workingDirectory)),
       dbToolHint,
       isGroupMember: isGroupMember(flow, node.id),
       collabChannel: input.collabChannel ?? 'legacy',

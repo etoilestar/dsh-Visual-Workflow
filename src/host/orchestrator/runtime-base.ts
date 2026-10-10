@@ -16,7 +16,7 @@ import { DEFAULT_RUN_EXECUTION_TIMEOUT_MS } from "../config.js"
 import { activeMilestoneGateOf, isGroupMember, normalizeOrgMeta } from '../graph/index.js'
 import type { RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import type { RunSnapshot, RunStatus } from '../shared/types.js'
-import { cloneSnapshot, setNodeStatus } from './snapshot.js'
+import { cloneSnapshot, failureOf, setNodeStatus } from './snapshot.js'
 import { RESUMABLE_STATUSES, type ResumeResult } from './resume.js'
 import { buildOrchestrationChangeText, type ExecutorContextFacts } from '../prompts/index.js'
 import { DEFAULT_SYSTEM_LANGUAGE } from '../system-language.js'
@@ -25,7 +25,10 @@ import { injectReflection, reflectionFactsOf } from './runtime-reflection.js'
 import { summarizeFlowChange } from './flow-diff.js'
 import { buildNodeContextFacts } from './graph-facts.js'
 import { parentExecutorOf } from './directive.js'
-import { WfError, messageOf } from './errors.js'
+import { WfError, messageOf } from "./errors.js"
+import { assertInvocationCurrent, resolveNodeDependencies } from "./dependency-resolution.js"
+import { executionOf, preflightNodeInputs, verifyNodeArtifacts } from "./execution-inputs.js"
+import { buildNodeResult, failedNodeResult } from "./node-results.js"
 import type { MilestoneMarkResult, MilestoneRunFacts, OrchestratorDeps, RunEntry } from './run-entry.js'
 import {
   type ChildMeta,
@@ -208,20 +211,31 @@ export abstract class RuntimeBase {
       delete entry.executorIsMilestone
       delete entry.milestoneProxyId
     }
-    if (!existing || existing.status !== 'running') {
-      setNodeStatus(snapshot, executor.nodeId, 'running', { now: this.now() })
-    }
+    const resolved = resolveNodeDependencies(flow, parentNode, snapshot)
+    const contract = executionOf(parentNode)
+    const hardContract = !!contract.inputs || !!contract.outputs || !!contract.outputFiles?.length || !!contract.completion
+    const prepared = structuredClone(snapshot)
+    setNodeStatus(prepared, executor.nodeId, "running", { ...(hardContract ? { attempts: 1 } : {}), now: this.now() })
+    await preflightNodeInputs(flow, parentNode, prepared, this.deps.store.root, await this.deps.authorizedInputFiles?.(snapshot.sessionId), resolved.invocation, await this.deps.sessionInputFiles?.(snapshot.sessionId), resolved.contextEdges)
+    assertInvocationCurrent(snapshot, resolved.invocation)
+    setNodeStatus(snapshot, executor.nodeId, "running", { ...(hardContract ? { attempts: 1 } : {}), now: this.now() })
+    const record = snapshot.nodes.find((record) => record.nodeId === executor.nodeId)!
+    record.invocation = resolved.invocation
+    record.executionContract = contract
+    const baseline = prepared.nodes.find((record) => record.nodeId === executor.nodeId)?.attemptHistory?.at(-1)?.outputBaseline
+    if (baseline && record.attemptHistory?.at(-1)) record.attemptHistory.at(-1)!.outputBaseline = baseline
     const context = buildNodeContextFacts({
       flow,
       node: parentNode,
       snapshot,
       documentTextLimit: this.deps.config.documentTextLimit,
+      contextEdges: resolved.contextEdges,
     })
     return {
       nodeId: executor.nodeId,
       nodeLabel: executor.nodeLabel,
       task: { ...context, nodeLabel: executor.nodeLabel, isGroupMember: isGroupMember(flow, executor.nodeId) },
-      runContextText: `runId=${snapshot.id}; attempt ${(existing?.attempts ?? 0) + 1}/1（父代理执行单元）`,
+      runContextText: `runId=${snapshot.id}; attempt ${(existing?.attempts ?? 0) + 1}/1（父代理执行单元）${Object.keys(resolved.invocation.inputs).length || Object.keys(resolved.invocation.parameters).length ? `\nRuntime invocation: ${JSON.stringify(resolved.invocation)}` : ""}${contract.outputs ? `\nOutput contract: ${JSON.stringify(contract.outputs)}` : ""}`,
     }
   }
 
@@ -230,7 +244,14 @@ export abstract class RuntimeBase {
    * P3：**闸门轮（executorIsMilestone）不生效**——闸门的完成只能由
    * `wf_graph_patch(mark_node)` 写入（D-07），否则自动标记会把闸门静默放过。
    */
-  protected markParentExecutorDone(entry: RunEntry): void {
+  protected async markParentExecutorDone(entry: RunEntry): Promise<void> {
+    if (entry.parentSettlementDone) return entry.parentSettlementDone
+    const pending = this.settleParentExecutor(entry)
+    entry.parentSettlementDone = pending
+    try { await pending } finally { delete entry.parentSettlementDone }
+  }
+
+  private async settleParentExecutor(entry: RunEntry): Promise<void> {
     if (entry.executorIsMilestone) return
     const nodeId = entry.executorParentId
     if (!nodeId) return
@@ -242,6 +263,24 @@ export abstract class RuntimeBase {
       snapshot.sessionId,
       Date.parse(snapshot.startedAt ?? '') || 0,
     ) ?? ''
+    const flow = await this.currentResolvedFlow(entry)
+    const configured = flow.nodes.find((node) => node.id === nodeId)
+    const node = configured?.kind === "parent" ? { ...configured, data: { ...configured.data, execution: existing.executionContract ?? configured.data.execution } } : configured
+    if (!node || node.kind !== "parent") throw new WfError("父代理执行节点已移除", "WF_NODE_MISSING")
+    const verification = structuredClone(snapshot)
+    let result
+    try {
+      await verifyNodeArtifacts(node, verification, this.now())
+      result = buildNodeResult(node, verification, output, undefined, this.deps.config.outputFullLimit)
+    } catch (error) {
+      if (snapshot.status !== "running" || entry.controller.signal.aborted || existing.status !== "running") throw new WfError("父代理结算已取消", "WF_CANCELLED")
+      setNodeStatus(snapshot, nodeId, "fail", { failure: { ...failureOf(error, "run_finish", "WF_OUTPUT_INVALID", this.now()), nodeId, attempt: existing.attempts }, now: this.now() })
+      existing.result = failedNodeResult(snapshot, nodeId)
+      delete existing.artifacts
+      await this.persistWarn(entry)
+      throw error
+    }
+    if (snapshot.status !== "running" || entry.controller.signal.aborted || existing.status !== "running") throw new WfError("父代理结算代际已失效", "WF_CANCELLED")
     setNodeStatus(snapshot, nodeId, 'ok', {
       output,
       outputFullLimit: this.deps.config.outputFullLimit,
@@ -249,6 +288,8 @@ export abstract class RuntimeBase {
       recordTurn: true,
       stopReason: 'completed',
     })
+    existing.result = result
+    if (result.artifacts.length) existing.artifacts = result.artifacts
   }
 
   /**
@@ -582,7 +623,10 @@ export abstract class RuntimeBase {
       const raw = entry.snapshot.mode === 'mode2'
         ? await this.deps.store.getServiceAsFlow(entry.snapshot.flowId)
         : await this.deps.store.getWorkflow(entry.snapshot.sessionId, entry.snapshot.flowId)
-      if (raw) return raw
+      if (raw) {
+        for (const node of raw.nodes) if (!entry.snapshot.nodes.some((record) => record.nodeId === node.id)) entry.snapshot.nodes.push({ nodeId: node.id, status: "pending", attempts: 0, startedAt: null, endedAt: null, output: "", outputSummary: "" })
+        return raw
+      }
     } catch {
       // 读失败回退起始快照
     }

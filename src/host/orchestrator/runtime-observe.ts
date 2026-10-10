@@ -12,6 +12,8 @@ import type { ChildMeta } from "./seams.js"
 import type { RunEntry, SubagentEndInfo } from './run-entry.js'
 import { RuntimeComm } from './runtime-comm.js'
 import { verifyNodeArtifacts } from './execution-inputs.js'
+import { buildNodeResult, failedNodeResult } from "./node-results.js"
+import type { NodeResult } from "../shared/runtime-types.js"
 
 export class RuntimeObserve extends RuntimeComm {
   /** 仅接纳宿主已识别的 Workflow child，不把官方 epoch ID 当 Workflow runId。 */
@@ -74,22 +76,23 @@ export class RuntimeObserve extends RuntimeComm {
       // 仅 completed 才算节点成功；ReAct 软截停由 consumeReactCapped 另判 react-capped。
       let completed = stopReason === 'completed'
       let artifactFailure
+      const outputText = lastAssistantText(info?.lastAssistantMessage, 0)
+      let result: NodeResult | undefined
       if (completed) {
         try {
-          const node = nodeById(await this.currentResolvedFlow(entry), meta.nodeId)
+          const configured = nodeById(await this.currentResolvedFlow(entry), meta.nodeId) ?? nodeById(entry.baseFlow, meta.nodeId)
+          const node = configured?.kind === "agent" ? { ...configured, data: { ...configured.data, execution: current?.executionContract ?? configured.data.execution } } : configured
           if (!this.currentChild(entry, childId, meta)) return
           if (node?.kind === "agent") {
             // 检查期间可能发生重试/退役；先对捕获的代际副本验证，提交前再核对。
             const verification = structuredClone(s)
             await verifyNodeArtifacts(node, verification, this.now())
+            result = buildNodeResult(node, verification, outputText, childId, this.deps.config.outputFullLimit)
             if (!this.currentChild(entry, childId, meta)) return
-            const record = s.nodes.find((n) => n.nodeId === meta.nodeId)
-            const artifacts = verification.nodes.find((n) => n.nodeId === meta.nodeId)?.artifacts
-            if (record && artifacts) record.artifacts = artifacts
-          }
+          } else throw new Error("执行节点定义已失效，无法验证输出契约")
         } catch (error) {
           completed = false
-          artifactFailure = failureOf(error, "run_finish", "WF_OUTPUT_FILE_MISSING", this.now())
+          artifactFailure = { ...failureOf(error, "run_finish", "WF_OUTPUT_INVALID", this.now()), nodeId: meta.nodeId, attempt: current?.attempts ?? 0 }
         }
       }
       if (!this.currentChild(entry, childId, meta)) return
@@ -100,7 +103,6 @@ export class RuntimeObserve extends RuntimeComm {
       // 历史 BUG（2026.09 修复）：此处曾用 OUTPUT_SUMMARY_LIMIT 先截断再交给 setNodeStatus，
       // 导致 outputFullLimit 形同虚设（完整产出实际卡在 6000 字），下游节点与断点续跑
       // 都只能拿到被砍掉的产出。
-      const outputText = lastAssistantText(info?.lastAssistantMessage, 0)
       // 软截停（护栏）：触达 ReAct 上限仍正常产出——标记 react-capped（非失败）
       const reactCapped = this.deps.runner.consumeReactCapped?.(childId) === true
       // P0-1：协作组成员回合结束 ≠ 终态完成——它在协作组内仍可被 wf_ask_agent 唤醒，
@@ -121,6 +123,14 @@ export class RuntimeObserve extends RuntimeComm {
         childId,
         ...(completed ? {} : { failure: artifactFailure ?? s.nodes.find((node) => node.nodeId === meta.nodeId)?.failure ?? failureOf({ message: `子代理执行结束：${stopReason || "unknown"}` }, "child_execute", "WF_CHILD_EXECUTION_FAILED", this.now()) }),
       })
+      const settled = s.nodes.find((node) => node.nodeId === meta.nodeId)!
+      settled.result = completed && result ? result : failedNodeResult(s, meta.nodeId, childId)
+      if (settled.result.artifacts.length) settled.artifacts = settled.result.artifacts
+      else delete settled.artifacts
+      if (settled.failure) Object.assign(settled.failure, { nodeId: meta.nodeId, attempt: settled.attempts })
+      this.traceRuntime(s, "child_settled", completed ? "completed" : "failed", { nodeId: meta.nodeId, childId, attempt: settled.attempts, errorCode: settled.failure?.code })
+      this.traceRuntime(s, "output_verified", completed ? settled.result.confirmation : "rejected", { nodeId: meta.nodeId, childId, attempt: settled.attempts, errorCode: settled.failure?.code })
+      this.traceRuntime(s, "node_completed", finalStatus, { nodeId: meta.nodeId, childId, attempt: settled.attempts, errorCode: settled.failure?.code })
       // 协作组聚合：成员产出一轮后若组内全部成员均已产出且该组无挂起 ask → 组卡片记为 ok
       // （「组内全部 ok -> 组卡片记为 ok」；只做回显，不干预父代理调度）
       if (completed) await this.markGroupOkIfComplete(entry, meta.nodeId)

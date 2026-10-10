@@ -18,7 +18,8 @@ import { failureOf, setNodeStatus, statusText, terminalizeNodes } from './snapsh
 import { GLOBAL_RUN_CALL_LIMIT, type CallerInfo, type GroupMemberPlan, type GroupStartResult } from './seams.js'
 import { RuntimeLaunch } from './runtime-launch.js'
 import type { GroupNode, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
-import { preflightNodeInputs } from './execution-inputs.js'
+import { executionOf, preflightNodeInputs } from "./execution-inputs.js"
+import { assertInvocationCurrent, resolveNodeDependencies } from "./dependency-resolution.js"
 
 export class RuntimeExecute extends RuntimeLaunch {
   // ---- wf_run_node ----------------------------------------------------------
@@ -74,7 +75,7 @@ export class RuntimeExecute extends RuntimeLaunch {
 
     // 执行者模式：父代理开始调度（首次 wf_run_node 成功前）→ 自身节点任务视为完成，
     // 快照标记 ok 并把父代理最近产出回写（下游 ctx 连线可注入该产出）
-    this.markParentExecutorDone(run)
+    await this.markParentExecutorDone(run)
 
     // 双向同步①：每次调度前重读最新工作流快照（运行中画布调整即时生效）
     const flow = await this.currentResolvedFlow(run)
@@ -123,6 +124,20 @@ export class RuntimeExecute extends RuntimeLaunch {
     try { return await this.runAgentNode(run, flow, node, args, callerSignal) } finally { dispatching.delete(node.id) }
   }
 
+  private assertNodeIdle(run: RunEntry, nodeId: string): void {
+    const current = run.snapshot.nodes.find((record) => record.nodeId === nodeId)
+    const childId = current?.childId
+    const child = childId === undefined ? undefined : this.childIndex.get(childId)
+    if (current?.status === "running" && childId !== undefined && run.inflight.has(childId)
+      && child && !child.retired && child.sessionId === run.snapshot.sessionId
+      && child.flowId === run.snapshot.flowId && child.nodeId === nodeId
+      && (child.runId === undefined || child.runId === run.snapshot.id)
+      && (child.attempt === undefined || child.attempt === current.attempts)) {
+      throw new WfError(`节点「${nodeId}」的子代理仍在执行，请等待结算后再调度`, "WF_BUSY")
+    }
+
+  }
+
   private async runAgentNode(run: RunEntry, flow: WorkflowDocument, node: RoleNode, args: RunNodeArgs, callerSignal?: AbortSignal): Promise<RunNodeResult> {
     const signal = callerSignal ? AbortSignal.any([run.controller.signal, callerSignal]) : run.controller.signal
     const assertActive = (): void => {
@@ -134,33 +149,38 @@ export class RuntimeExecute extends RuntimeLaunch {
     // 虚拟节点解析后一切以主节点 key 记账（共享同一子代理执行实例与快照记录）
     const resolvedNodeId = node.id
 
-    // 派发窗口结束后 child 仍可能在执行；只认当前运行/attempt 的有效登记，
-    // 避免退役 child 或断点恢复前的登记把节点永久锁在忙碌状态。
+    this.assertNodeIdle(run, resolvedNodeId)
     const current = run.snapshot.nodes.find((record) => record.nodeId === resolvedNodeId)
-    const childId = current?.childId
-    const child = childId === undefined ? undefined : this.childIndex.get(childId)
-    if (current?.status === "running" && childId !== undefined && run.inflight.has(childId)
-      && child && !child.retired && child.sessionId === run.snapshot.sessionId
-      && child.flowId === run.snapshot.flowId && child.nodeId === resolvedNodeId
-      && (child.runId === undefined || child.runId === run.snapshot.id)
-      && (child.attempt === undefined || child.attempt === current.attempts)) {
-      throw new WfError(`节点「${labelOf(node)}」的子代理仍在执行，请等待结算后再调度`, "WF_BUSY")
-    }
 
-    // 硬护栏：全局调用上限 + 单节点重试上限
-    run.callCount += 1
-    if (run.callCount > GLOBAL_RUN_CALL_LIMIT) {
-      throw new WfError(`编排执行超过全局调用上限（${GLOBAL_RUN_CALL_LIMIT} 次 wf_run_node），自动停止`, 'WF_GLOBAL_LIMIT')
-    }
-    const attempt = (run.attempts.get(resolvedNodeId) ?? 0) + 1
-    run.attempts.set(resolvedNodeId, attempt)
+    if (run.callCount >= GLOBAL_RUN_CALL_LIMIT) throw new WfError(`编排执行超过全局调用上限（${GLOBAL_RUN_CALL_LIMIT} 次 wf_run_node）`, "WF_GLOBAL_LIMIT")
+    const attempt = (run.attempts.get(resolvedNodeId) ?? current?.attempts ?? 0) + 1
     const effectiveRetryLimit = effectiveRetryLimitOf(node, args, this.deps.config.retryLimitDefault)
-    if (attempt > effectiveRetryLimit + 1) {
-      throw new WfError(`节点「${labelOf(node)}」执行次数超过上限（最多 ${effectiveRetryLimit} 次重试）`, 'WF_RETRY_LIMIT')
-    }
+    if (attempt > effectiveRetryLimit + 1) throw new WfError(`节点「${labelOf(node)}」执行次数超过上限（最多 ${effectiveRetryLimit} 次重试）`, "WF_RETRY_LIMIT")
     const effectiveReactLimit = effectiveReactLimitOf(node, args, this.deps.config.reactIterationLimitDefault)
     const thinking = effectiveThinkingOf(node, args)
-    run.lastActiveAt = this.now()
+    const prepared = structuredClone(run.snapshot)
+    let resolved: ReturnType<typeof resolveNodeDependencies>
+    let blocks: ReturnType<typeof buildNodeBlocks>
+    try {
+      resolved = resolveNodeDependencies(flow, node, run.snapshot, args.selectedEdgeIds)
+      resolved.invocation.attempt = attempt
+      setNodeStatus(prepared, resolvedNodeId, "running", { attempts: attempt, now: this.now() })
+      await preflightNodeInputs(flow, node, prepared, this.deps.store.root, await this.deps.authorizedInputFiles?.(run.snapshot.sessionId), resolved.invocation, await this.deps.sessionInputFiles?.(run.snapshot.sessionId), resolved.contextEdges)
+      assertActive()
+      assertInvocationCurrent(run.snapshot, resolved.invocation)
+      blocks = buildNodeBlocks({ flow, node, snapshot: prepared, documentTextLimit: this.deps.config.documentTextLimit, systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE, invocation: resolved.invocation, contextEdges: resolved.contextEdges })
+    } catch (error) {
+      if (run.snapshot.status === "running" || run.snapshot.status === "paused") {
+        const failure = { ...failureOf(error, "node_input", "WF_RUNTIME_INPUT_INVALID", this.now()), nodeId: resolvedNodeId, attempt: current?.attempts ?? 0 }
+        setNodeStatus(run.snapshot, resolvedNodeId, current?.status ?? "pending", { failure, now: this.now() })
+        this.traceRuntime(run.snapshot, failure.code === "WF_INPUT_REQUIRED" ? "input_requested" : "input_validated", "rejected", { nodeId: resolvedNodeId, attempt: current?.attempts ?? 0, errorCode: failure.code })
+        await this.persistWarn(run)
+      }
+      throw error
+    }
+    this.traceRuntime(run.snapshot, "input_validated", "accepted", { nodeId: node.id, attempt, inputNames: Object.keys(resolved.invocation.inputs) })
+    this.traceRuntime(run.snapshot, "dependency_resolved", "ready", { nodeId: node.id, attempt })
+    this.traceRuntime(run.snapshot, "handoff_prepared", "ready", { nodeId: node.id, attempt, inputNames: Object.keys(resolved.invocation.inputs) })
 
     // 启动子代理之前，为其 db-in 所连本地库预建索引：把构建耗时吸收到启动阶段，
     // 避免子代理首次检索才构建（延迟/「无索引」间歇）。best-effort：构建缺失/失败
@@ -170,7 +190,20 @@ export class RuntimeExecute extends RuntimeLaunch {
       await this.deps.dbIndexer.ensureIndexes(resolvedNodeId, flow)
     }
 
+    assertActive()
+    assertInvocationCurrent(run.snapshot, resolved.invocation)
+    run.callCount += 1
+    run.attempts.set(resolvedNodeId, attempt)
+    run.lastActiveAt = this.now()
     setNodeStatus(run.snapshot, resolvedNodeId, 'running', { attempts: attempt, now: this.now(), provider: node.data.provider || run.snapshot.parentRoute?.provider, model: node.data.model || run.snapshot.parentRoute?.model })
+    const dispatched = run.snapshot.nodes.find((record) => record.nodeId === resolvedNodeId)!
+    dispatched.invocation = structuredClone(resolved.invocation)
+    dispatched.executionContract = executionOf(node)
+    const baseline = prepared.nodes.find((record) => record.nodeId === resolvedNodeId)?.attemptHistory?.at(-1)?.outputBaseline
+    if (dispatched.attemptHistory?.at(-1)) Object.assign(dispatched.attemptHistory.at(-1)!, { inputRevision: resolved.invocation.inputRevision, ...(baseline ? { outputBaseline: baseline } : {}) })
+    delete dispatched.result
+    delete dispatched.artifacts
+    this.traceRuntime(run.snapshot, "node_dispatched", "running", { nodeId: resolvedNodeId, attempt })
     this.log().info(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, attempt, phase: "child_start", status: "requested", provider: node.data.provider, model: node.data.model }))
     await this.persistWarn(run)
 
@@ -188,18 +221,11 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
 
     try {
-      await preflightNodeInputs(flow, node, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(run.snapshot.sessionId))
       assertActive()
-      const blocks = buildNodeBlocks({
-      flow,
-      node,
-      snapshot: run.snapshot,
-      documentTextLimit: this.deps.config.documentTextLimit,
-      systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
-    })
       const { childId, replacedChildId } = await this.deps.runner.startNodeTask({
         runId: run.snapshot.id,
         attempt,
+        invocation: structuredClone(resolved.invocation),
         sessionId: run.snapshot.sessionId,
         flowId: run.snapshot.flowId,
         mode: run.snapshot.mode,
@@ -228,13 +254,14 @@ export class RuntimeExecute extends RuntimeLaunch {
       this.childIndex.set(childId, { sessionId: run.snapshot.sessionId, flowId: run.snapshot.flowId, nodeId: resolvedNodeId, runId: run.snapshot.id, attempt, ...(this.childEpochs.has(childId) ? { hostEpochId: this.childEpochs.get(childId) } : {}) })
       this.childByNode.set(resolvedNodeId, childId)
       this.applyPendingChildRoute(run, resolvedNodeId, childId)
+      this.traceRuntime(run.snapshot, "child_started", "running", { nodeId: resolvedNodeId, childId, attempt })
       await this.persistWarn(run)
       this.log().info(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, childId, attempt, phase: "child_execute", status: "started" }))
       if (!waitRequested) return { nodeId: resolvedNodeId, status: 'started', childId }
     } catch (error) {
       if (waiter) run.waiters.delete(waitKey)
       if (run.snapshot.status === "running" || run.snapshot.status === "paused") {
-        const failure = failureOf(error, "child_start", "WF_CHILD_START_FAILED", this.now())
+        const failure = { ...failureOf(error, "child_start", "WF_CHILD_START_FAILED", this.now()), nodeId: resolvedNodeId, attempt }
         const failedChildId = error instanceof Error && "childId" in error && typeof error.childId === "string" ? error.childId : undefined
         setNodeStatus(run.snapshot, resolvedNodeId, "fail", { attempts: attempt, now: this.now(), failure, childId: failedChildId, stopReason: "start-error", recordTurn: true })
         await this.persistWarn(run)
@@ -278,7 +305,28 @@ export class RuntimeExecute extends RuntimeLaunch {
    * @param args - 工具入参（thinking / iterationLimit / retryLimit 作用于本组）。
    * @returns started 路径结果（含成员清单；一个组对应多个成员会话，故无单一 childId）。
    */
-  private async runGroupNode(
+  private async runGroupNode(run: RunEntry, flow: WorkflowDocument, group: GroupNode, args: RunNodeArgs): Promise<RunNodeResult> {
+    const ids = [...new Set([group.id, ...group.data.memberIds.map((id) => mainNodeIdOf(flow, id) ?? id)])]
+    const dispatching = run.dispatching ??= new Set<string>()
+    for (const id of ids) {
+      if (dispatching.has(id)) throw new WfError(`节点 ${id} 正在派发`, "WF_BUSY")
+      this.assertNodeIdle(run, id)
+    }
+    for (const id of ids) dispatching.add(id)
+    try { return await this.runGroupNodeReserved(run, flow, group, args) } catch (error) {
+      if (!run.controller.signal.aborted && ["running", "paused"].includes(run.snapshot.status)) {
+        const record = run.snapshot.nodes.find((record) => record.nodeId === group.id)
+        if (record?.status === "pending") {
+          setNodeStatus(run.snapshot, group.id, "pending", { failure: { ...failureOf(error, "node_input", "WF_RUNTIME_INPUT_INVALID", this.now()), nodeId: group.id, attempt: record.attempts }, now: this.now() })
+          this.traceRuntime(run.snapshot, "input_requested", "rejected", { nodeId: group.id, attempt: record.attempts, errorCode: record.failure?.code })
+          await this.persistWarn(run)
+        }
+      }
+      throw error
+    } finally { for (const id of ids) dispatching.delete(id) }
+  }
+
+  private async runGroupNodeReserved(
     run: RunEntry,
     flow: WorkflowDocument,
     group: GroupNode,
@@ -303,20 +351,17 @@ export class RuntimeExecute extends RuntimeLaunch {
       )
     }
 
-    // 硬护栏与单节点路径同口径（全局调用上限 + 组级尝试计数 + 组级参数覆盖）
-    run.callCount += 1
-    if (run.callCount > GLOBAL_RUN_CALL_LIMIT) {
-      throw new WfError(`编排执行超过全局调用上限（${GLOBAL_RUN_CALL_LIMIT} 次 wf_run_node），自动停止`, 'WF_GLOBAL_LIMIT')
+    const assertActive = (): void => {
+      if (run.controller.signal.aborted || run.snapshot.status !== "running") throw new WfError("协作组派发已取消或暂停", "WF_CANCELLED")
     }
+    assertActive()
+    if (run.callCount >= GLOBAL_RUN_CALL_LIMIT) throw new WfError("编排调用预算耗尽", "WF_GLOBAL_LIMIT")
     const attempt = (run.attempts.get(groupId) ?? 0) + 1
-    run.attempts.set(groupId, attempt)
     const effectiveRetryLimit = effectiveRetryLimitOf(group, args, this.deps.config.retryLimitDefault)
-    if (attempt > effectiveRetryLimit + 1) {
-      throw new WfError(`协作组「${labelOf(group)}」执行次数超过上限（最多 ${effectiveRetryLimit} 次重试）`, 'WF_RETRY_LIMIT')
-    }
+    if (attempt > effectiveRetryLimit + 1) throw new WfError("协作组重试预算耗尽", "WF_RETRY_LIMIT")
     const effectiveReactLimit = effectiveReactLimitOf(group, args, this.deps.config.reactIterationLimitDefault)
     const thinking = effectiveThinkingOf(group, args)
-    run.lastActiveAt = this.now()
+    const prepared = structuredClone(run.snapshot)
 
     // 成员任务块：与单节点路径同一构建器；协作块使用官方通道文案（send_message + 成员名）
     const plans: GroupMemberPlan[] = []
@@ -325,40 +370,67 @@ export class RuntimeExecute extends RuntimeLaunch {
       if (!member || member.kind !== 'agent') {
         throw new WfError(`协作组成员必须是角色(agent)节点：${memberId}`, 'WF_NODE_KIND')
       }
-      // 成员 db-in 索引预建：与单节点路径同一时机（启动前吸收构建耗时；best-effort）
+      const count = (run.attempts.get(memberId) ?? prepared.nodes.find((record) => record.nodeId === memberId)?.attempts ?? 0) + 1
+      if (count > effectiveRetryLimitOf(member, args, this.deps.config.retryLimitDefault) + 1) throw new WfError(`成员 ${memberId} 重试预算耗尽`, "WF_RETRY_LIMIT")
+      const resolved = resolveNodeDependencies(flow, member, run.snapshot, args.selectedEdgeIds)
+      resolved.invocation.attempt = count
+      setNodeStatus(prepared, memberId, "running", { attempts: count, now: this.now() })
+      await preflightNodeInputs(flow, member, prepared, this.deps.store.root, await this.deps.authorizedInputFiles?.(sessionId), resolved.invocation, await this.deps.sessionInputFiles?.(sessionId), resolved.contextEdges)
+      assertActive()
+      assertInvocationCurrent(run.snapshot, resolved.invocation)
       if (this.deps.dbIndexer) await this.deps.dbIndexer.ensureIndexes(memberId, flow)
       const blocks = buildNodeBlocks({
         flow,
         node: member,
-        snapshot: run.snapshot,
+        snapshot: prepared,
         documentTextLimit: this.deps.config.documentTextLimit,
         systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
         collabChannel: 'official',
+        invocation: resolved.invocation,
+        contextEdges: resolved.contextEdges,
       })
       plans.push({
         node: member,
+        invocation: resolved.invocation,
         blocks,
         ...(thinking !== undefined ? { thinking } : {}),
         ...(effectiveReactLimit !== undefined ? { iterationLimit: effectiveReactLimit } : {}),
       })
     }
 
+    assertActive()
+    for (const plan of plans) assertInvocationCurrent(run.snapshot, plan.invocation!)
+    run.callCount += 1
+    run.attempts.set(groupId, attempt)
+    run.lastActiveAt = this.now()
     setNodeStatus(run.snapshot, groupId, 'running', { attempts: attempt, now: this.now() })
     await this.persistWarn(run)
     const started = new Set<string>()
     const attempted = new Set<string>()
     const onMemberStarting = async (nodeId: string): Promise<void> => {
+      assertActive()
+      const plan = plans.find((plan) => plan.node.id === nodeId)
+      if (!plan) throw new WfError(`未登记的协作组成员：${nodeId}`, "WF_NODE_MISSING")
+      assertInvocationCurrent(run.snapshot, plan.invocation!)
       if (attempted.has(nodeId)) return
       attempted.add(nodeId)
-      const count = (run.attempts.get(nodeId) ?? 0) + 1
+      const count = plan.invocation!.attempt
       run.attempts.set(nodeId, count)
-      const member = plans.find((plan) => plan.node.id === nodeId)?.node
-      setNodeStatus(run.snapshot, nodeId, 'running', { attempts: count, now: this.now(), provider: member?.data.provider || run.snapshot.parentRoute?.provider, model: member?.data.model || run.snapshot.parentRoute?.model })
+      const member = plan.node
+      setNodeStatus(run.snapshot, nodeId, "running", { attempts: count, now: this.now(), provider: member.data.provider || run.snapshot.parentRoute?.provider, model: member.data.model || run.snapshot.parentRoute?.model })
+      const record = run.snapshot.nodes.find((record) => record.nodeId === nodeId)!
+      record.invocation = structuredClone(plan.invocation)
+      record.executionContract = executionOf(member)
+      delete record.result
+      delete record.artifacts
+      const baseline = prepared.nodes.find((record) => record.nodeId === nodeId)?.attemptHistory?.at(-1)?.outputBaseline
+      if (record.attemptHistory?.at(-1)) Object.assign(record.attemptHistory.at(-1)!, { inputRevision: plan.invocation!.inputRevision, ...(baseline ? { outputBaseline: baseline } : {}) })
+      this.traceRuntime(run.snapshot, "node_dispatched", "running", { nodeId, attempt: count, inputNames: Object.keys(plan.invocation!.inputs) })
       await this.persistWarn(run)
-      if (member) await preflightNodeInputs(flow, member, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(sessionId))
     }
     const onMemberStarted = async (member: GroupStartResult['members'][number]): Promise<void> => {
       await onMemberStarting(member.nodeId)
+      assertActive()
       started.add(member.nodeId)
       setNodeStatus(run.snapshot, member.nodeId, 'running', { childId: member.childId, now: this.now() })
       run.inflight.add(member.childId)
@@ -427,7 +499,7 @@ export class RuntimeExecute extends RuntimeLaunch {
     const sessionId = caller.sessionId
     const run = sessionId ? await this.ensureActiveRun(sessionId) : null
     // 执行者模式：wf_finish 同样视为父代理自身任务完成（无后续调度、直接收尾的流程）
-    if (run) this.markParentExecutorDone(run)
+    if (run && args.status !== "failed") await this.markParentExecutorDone(run)
     // 已停止/已完成的幂等：允许对已终止的同会话运行静默返回。
     // 终态条目已从内存释放（防内存膨胀），故幂等判定查磁盘历史（收尾调用频率极低）。
     if (!run) {
