@@ -17,6 +17,8 @@ export interface RunEntry {
     attempts: Map<string, number>;
     /** wf_run_node 总调用数（全局硬护栏）。 */
     callCount: number;
+    /** 同一节点的派发窗口去重；finally 撤销，不进入持久化快照。 */
+    dispatching?: Set<string>;
     /** 最近活动时间戳（空闲看护基准）。 */
     lastActiveAt: number;
     /** 阻塞等待表：`${runId}:${nodeId}` → waiter（wait:true 路径）。 */

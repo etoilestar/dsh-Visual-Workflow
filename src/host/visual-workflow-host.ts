@@ -166,6 +166,14 @@ export class VisualWorkflowHost extends Service {
       toolFilter: this.childToolFilter,
       promptSetup: this.childPrompt,
       logger: cordisLogger(ctx),
+      retireChild: (childId) => {
+        this.childPromptStates.delete(childId)
+        this.childToolFilter.remember(childId, undefined)
+        this.modelSelection.forget?.(childId)
+        this.orchestrator.discardPendingChildRoute(childId)
+        // 旧 Agent 仍在内存时不得撤销权限/护栏；中断是尽力而为，由 disposed 撤销。
+        if (!agentsServiceLike(ctx)?.get(childId)) this.dropChildScope(childId)
+      },
     })
     this.orchestrator = new OrchestratorRuntime({
       store: this.store,
@@ -359,6 +367,8 @@ export class VisualWorkflowHost extends Service {
     const agentId = String(payload?.agent?.id ?? '')
     if (!agentId) return
     this.dropChildScope(agentId)
+    // 明确退役才删除留存 Prompt；普通结束必须保留冷恢复组成及待结算软截停标记。
+    if (!this.childPromptStates.has(agentId)) this.runner.releaseRetiredChild(agentId)
     this.orchestrator.discardPendingChildRoute(agentId)
   }
 
@@ -495,6 +505,14 @@ export class VisualWorkflowHost extends Service {
     //     干活」翻译成「运行不空闲」。子代理转 running 不触发本路径（会话 id 不是
     //     父代理会话，touchRunForSession 内部按会话+status 精确匹配）。
     // ctx.on 随本 fiber 自动反注册，无需手动 removeListener。
+    this.ctx.on("subagent/start", (payload) => {
+      const info = payload as { id?: unknown; runId?: unknown }
+      const childId = typeof info?.id === "string" ? info.id : ""
+      // 普通 DSH 子代理不进入 Workflow 代际表；首建通过创建窗口识别，冷恢复通过留存状态识别。
+      if (childId && (this.childPrompt.hasPending() || this.childPromptStates.has(childId) || this.orchestrator.childMetaFor(childId))) {
+        this.orchestrator.handleSubagentStart(info)
+      }
+    })
     this.ctx.on('subagent/end', (payload) => this.onSubagentEnd(payload))
     this.ctx.on('agent/error', (payload) => this.onAgentError(payload))
     this.ctx.on("agent/request", async (payload, next) => {

@@ -1,6 +1,8 @@
 import type { SubagentEndInfo } from './run-entry.js';
 import { RuntimeComm } from './runtime-comm.js';
 export declare class RuntimeObserve extends RuntimeComm {
+    /** 仅接纳宿主已识别的 Workflow child，不把官方 epoch ID 当 Workflow runId。 */
+    handleSubagentStart(info: Pick<SubagentEndInfo, "id" | "runId">): void;
     /**
      * 子代理结束观察：
      *   - 运行快照：completed → 节点 ok（outputSummary 取最后一条 assistant 文本）；
@@ -11,7 +13,8 @@ export declare class RuntimeObserve extends RuntimeComm {
      * 只观察 DSH 事件，不向父代理注入任何额外内容——父代理继续推进由官方汇报链路驱动。
      * 暂停中的运行（paused）同样回写节点状态（该节点确实完成了）。
      */
-    handleSubagentEnd(info: SubagentEndInfo): Promise<void>;
+    handleSubagentEnd(info: SubagentEndInfo, tries?: number): Promise<void>;
+    private currentChild;
     /**
      * 迟到 subagent/end 有界重试：等待 childIndex 完成登记后重放事件。
      * 防御性兜底——正常路径事件必然晚于登记到达，重试一次即命中；

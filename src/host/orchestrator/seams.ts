@@ -125,6 +125,8 @@ export interface GroupStartResult {
 
 /** 节点任务启动入参（任务块与节点级参数，经子代理引擎透传官方配置）。 */
 export interface NodeStartInput {
+  /** 派发/重建前重新检查运行状态（暂停可能不触发 AbortSignal）。 */
+  assertActive?: () => void
   runId?: string
   attempt?: number
   sessionId: string
@@ -311,6 +313,11 @@ export interface ChildMeta {
   sessionId: string
   flowId: string
   nodeId: string
+  /** 新登记携带执行代际；旧登记缺省时仍按会话与当前 child 校验。 */
+  runId?: string
+  attempt?: number
+  /** 官方 subagent/start 的驻留代际 ID；与 Workflow runId 含义不同。 */
+  hostEpochId?: string
   /**
    * 该 child 已被同节点的更新配置替换（子代理重建），不再参与节点结论汇聚。
    *

@@ -175,3 +175,18 @@ describe('模型选择装配（model-selection.ts）', () => {
     expect(resolved).toEqual({ provider: 'parent', model: 'parent' })
   })
 })
+
+it("test_model_selection_retired_child_forgets_route_without_affecting_active_child", async () => {
+  const setup = createModelSelectionSetup()
+  setup.remember("old", { provider: "old-provider", model: "old-model" })
+  setup.remember("active", { provider: "active-provider", model: "active-model" })
+  setup.forget?.("old")
+  const retired = new FakeChildCtx()
+  const active = new FakeChildCtx()
+  setup.contribution(retired)
+  setup.contribution(active)
+  setup.restore("old", retired)
+  setup.restore("active", active)
+  expect(await assembleThenRequest(retired, () => ({ provider: "parent", model: "parent" }))).toEqual({ provider: "parent", model: "parent" })
+  expect(await assembleThenRequest(active, () => ({ provider: "parent", model: "parent" }))).toEqual({ provider: "active-provider", model: "active-model" })
+})

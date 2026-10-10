@@ -15,6 +15,7 @@ export declare class RuntimeExecute extends RuntimeLaunch {
     wfRunNode(caller: CallerInfo, args: RunNodeArgs, callerSignal?: AbortSignal, options?: {
         expectedMode?: 'mode1' | 'mode2';
     }): Promise<RunNodeResult>;
+    private runAgentNode;
     /**
      * 协作组节点执行：把整组启动为官方 Agent Team。
      *

@@ -211,6 +211,8 @@ export interface NodeAgentRunnerDeps {
      */
     toolSwitches?: () => ReadonlySet<string> | Promise<ReadonlySet<string>>;
     logger?: OrchestratorLogger;
+    /** 已替换 child 的作用域撤销由宿主执行；普通结束不调用。 */
+    retireChild?: (childId: string) => void;
 }
 /**
  * 节点子代理执行引擎：每个角色节点 = 一个可延续子代理
@@ -225,6 +227,8 @@ export declare class NodeAgentRunner implements NodeRunner {
     private readonly nodeChildren;
     /** 已创建 childId 集合（dispose 清理护栏登记用）。 */
     private readonly childIds;
+    /** 只覆盖创建/投递窗口，同节点并发调用拒绝而不排队重复投递。 */
+    private readonly dispatching;
     /** 软截停消费适配（NodeRunner 契约）。 */
     readonly consumeReactCapped: NonNullable<NodeRunner['consumeReactCapped']>;
     /** 协作组启动器（官方 Team 路径；与节点路径共用同一套依赖与装配对象）。 */
@@ -248,6 +252,8 @@ export declare class NodeAgentRunner implements NodeRunner {
     }>;
     /** 尽力中断子代理当前回合（保留会话；官方 interrupt 语义）。 */
     interruptChild(childId: string, sessionId: string): Promise<void>;
+    /** 宿主确认旧 Agent 已销毁后回收登记；存活期间保留护栏。 */
+    releaseRetiredChild(childId: string): void;
     /** 清理子代理表与护栏登记（宿主 dispose 调用；不中断**存活**子代理——由运行时统一中止）。
      *  （例外：配置签名变化重建时被替换的旧子代理立即尽力中断，见 ensureNodeChild。）
      *  每子代理作用域装配（角色提示词/工具可见性/模型选择/软截停）由 host 层
@@ -284,6 +290,11 @@ export declare class NodeAgentRunner implements NodeRunner {
         created: boolean;
         replacedChildId?: string;
     }>;
+    private withNodeDispatch;
+    private assertActive;
+    private ensureNodeChildUnlocked;
+    /** 首次、配置变更与不可恢复重建共用创建窗口；成功才切换缓存。 */
+    private createNodeChild;
     private requireSubagents;
     private requireParent;
     /**

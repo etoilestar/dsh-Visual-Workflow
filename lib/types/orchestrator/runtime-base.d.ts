@@ -19,6 +19,8 @@ export declare abstract class RuntimeBase {
     /** 全部 run（含已终止的历史内存条目；持久化历史另见 store.listRuns）。 */
     readonly runs: Map<string, RunEntry>;
     /** childId → 运行位置反查（subagent/end 观察回写用）。 */
+    /** 已识别 Workflow child 的官方驻留代际，首建事件可早于登记。 */
+    protected readonly childEpochs: Map<string, string>;
     protected readonly childIndex: Map<string, ChildMeta>;
     /** nodeId → childId 反向索引（wf_ask_agent 节点 id 寻址 O(1)，P2-4）。 */
     protected readonly childByNode: Map<string, string>;

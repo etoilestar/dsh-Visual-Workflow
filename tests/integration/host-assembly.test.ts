@@ -369,3 +369,79 @@ describe('VisualWorkflowHost 装配', () => {
   })
 
 })
+
+it("test_host_rebuild_releases_retired_guards_and_observes_workflow_epochs_only", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "vw-host-recovery-"))
+  cleanups.push(() => rm(dir, { recursive: true, force: true }))
+  const root = new Context()
+  const parent = { id: "parent-session", status: "idle" }
+  const children = new Map<string, { id: string; ctx: ReturnType<typeof makeChildContext>["ctx"] }>()
+  function makeChildContext() {
+    const guards: Array<(call: { name: string }) => string | undefined> = []
+    const masks: unknown[] = []
+    const listeners: unknown[] = []
+    const tools = {
+      get: () => undefined,
+      restrict: (mask: unknown) => { masks.push(mask); return () => { masks.splice(masks.indexOf(mask), 1) } },
+      guard: (guard: (call: { name: string }) => string | undefined) => { guards.push(guard); return () => { guards.splice(guards.indexOf(guard), 1) } },
+    }
+    const ctx = {
+      get: (name: string) => name === "tools" ? tools : undefined,
+      on: (_name: string, listener: unknown) => { listeners.push(listener); return () => { listeners.splice(listeners.indexOf(listener), 1) } },
+      systemPrompt: { section: () => () => {} },
+    }
+    return { ctx, guards, masks, listeners }
+  }
+  class TestAgents extends Service {
+    constructor(ctx: Context) { super(ctx, "agents") }
+    get(id: string) { return id === parent.id ? parent : children.get(id) }
+  }
+  const scopes: ReturnType<typeof makeChildContext>[] = []
+  class TestSubagents extends Service {
+    constructor(ctx: Context) { super(ctx, "subagents") }
+    list() { return ["spawn"] }
+    async startContinuable() {
+      const scope = makeChildContext()
+      scopes.push(scope)
+      const childId = `owned-${scopes.length}`
+      const child = { id: childId, ctx: scope.ctx }
+      children.set(childId, child)
+      await root.serial("agent/created", { agent: child })
+      root.emit("subagent/start", { id: childId, runId: `epoch-${scopes.length}` })
+      return { childId }
+    }
+    async sendMessage() { children.delete("owned-1"); throw Object.assign(new Error("不能恢复持久子代理"), { name: "SubagentError", code: "NOT_RESUMABLE" }) }
+    interrupt() {}
+  }
+  await root.plugin(TestAgents)
+  await root.plugin(TestSubagents)
+  await root.plugin(VisualWorkflowHost, makeConfig(dir))
+  const host = root.get(VisualWorkflowHostServiceName) as VisualWorkflowHost
+  const epoch = vi.spyOn(host.orchestrator, "handleSubagentStart")
+  root.emit("subagent/start", { id: "unrelated", runId: "unrelated-epoch" })
+  expect(epoch).not.toHaveBeenCalled()
+  const input = {
+    sessionId: parent.id, flowId: "flow", signal: new AbortController().signal,
+    node: { id: "node", kind: "agent" as const, position: { x: 0, y: 0 }, data: { label: "角色", systemPrompt: "节点独立任务", provider: "", model: "", presetId: null, retryLimit: 1, inputSchema: "", outputSchema: "" } },
+    blocks: [{ type: "text" as const, text: "完整任务" }],
+  }
+  const first = await host.runner.startNodeTask(input)
+  expect(scopes[0].guards.some((guard) => guard({ name: "wf_finish" })?.startsWith("WF_NOT_ROOT"))).toBe(true)
+  const second = await host.runner.startNodeTask(input)
+  expect(second.replacedChildId).toBe(first.childId)
+  expect(scopes[0].guards).toHaveLength(0)
+  expect(scopes[0].masks).toHaveLength(0)
+  expect(scopes[0].listeners).toHaveLength(0)
+  expect(scopes[1].guards.some((guard) => guard({ name: "wf_finish" })?.startsWith("WF_NOT_ROOT"))).toBe(true)
+  expect(epoch.mock.calls.map(([info]) => info)).toEqual([{ id: "owned-1", runId: "epoch-1" }, { id: "owned-2", runId: "epoch-2" }])
+  // 配置替换时旧 Agent 尚在内存，中断是尽力而为；权限不能提前撤销。
+  await host.runner.startNodeTask({ ...input, node: { ...input.node, data: { ...input.node.data, systemPrompt: "新的角色配置" } } })
+  expect(scopes[1].guards.some((guard) => guard({ name: "wf_finish" })?.startsWith("WF_NOT_ROOT"))).toBe(true)
+  const disposed = children.get("owned-2")!
+  children.delete("owned-2")
+  root.emit("agent/disposed", { agent: disposed })
+  expect(scopes[1].guards).toHaveLength(0)
+  expect(scopes[1].masks).toHaveLength(0)
+  await root.fiber.dispose()
+  expect(scopes[2].guards).toHaveLength(0)
+})

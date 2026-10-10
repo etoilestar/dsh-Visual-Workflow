@@ -46,6 +46,8 @@ export abstract class RuntimeBase {
   /** 全部 run（含已终止的历史内存条目；持久化历史另见 store.listRuns）。 */
   readonly runs = new Map<string, RunEntry>()
   /** childId → 运行位置反查（subagent/end 观察回写用）。 */
+  /** 已识别 Workflow child 的官方驻留代际，首建事件可早于登记。 */
+  protected readonly childEpochs = new Map<string, string>()
   protected readonly childIndex = new Map<string, ChildMeta>()
   /** nodeId → childId 反向索引（wf_ask_agent 节点 id 寻址 O(1)，P2-4）。 */
   protected readonly childByNode = new Map<string, string>()
@@ -473,10 +475,10 @@ export abstract class RuntimeBase {
    */
   runForChild(childId: string): RunEntry | null {
     const meta = this.childIndex.get(childId)
-    if (!meta) return null
+    if (!meta || meta.retired) return null
     for (const entry of this.runs.values()) {
       const s = entry.snapshot
-      if (s.sessionId === meta.sessionId && s.flowId === meta.flowId && s.status === 'running') return entry
+      if (s.sessionId === meta.sessionId && s.flowId === meta.flowId && (!meta.runId || s.id === meta.runId) && s.status === 'running') return entry
     }
     return null
   }
@@ -725,6 +727,7 @@ export abstract class RuntimeBase {
     }
     this.runs.clear()
     this.childIndex.clear()
+    this.childEpochs.clear()
     this.adopting.clear()
     this.resuming.clear()
   }

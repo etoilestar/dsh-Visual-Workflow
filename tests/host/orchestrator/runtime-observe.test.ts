@@ -108,7 +108,8 @@ describe('subagent/end 观察回写（§8 #21）', () => {
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
     expect(entry.inflight.has('child-1')).toBe(true)
 
-    // 配置签名变化：第二次派发替换 child-1（引擎已尽力中断），编排器把旧 child 退役
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
+    // 结算后配置签名变化：第二次派发替换 child-1，编排器把旧 child 退役。
     h.runner.nextReplacedChildId = 'child-1'
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
     expect(entry.inflight.has('child-2')).toBe(true)
@@ -232,4 +233,83 @@ describe('subagent/end 观察回写（§8 #21）', () => {
     await h.runtime.wfFinish(caller, { status: 'completed', summary: '完毕' })
     expect(entry.snapshot.nodes.find((n) => n.nodeId === 'n-a1')!.status).toBe('ok')
   })
+})
+
+describe("子代理结算代际", () => {
+  it("test_settlement_old_attempt_does_not_overwrite_current_child", async () => {
+    const h = await makeHarness()
+    const { entry } = await start(h, makeFlow())
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "error" })
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    expect(h.runtime.childMetaFor("child-2")).toMatchObject({ runId: entry.snapshot.id, attempt: 2 })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "旧轮次" }] })
+    expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "running", childId: "child-2", attempts: 2, output: "" })
+    expect(entry.inflight.has("child-2")).toBe(true)
+    await h.runtime.handleSubagentEnd({ id: "child-2", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "当前轮次" }] })
+    expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "ok", output: "当前轮次" })
+  })
+
+  it("test_settlement_resume_during_validation_discards_old_result", async () => {
+    const h = await makeHarness()
+    const { entry } = await start(h, makeFlow())
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const original = h.store.getWorkflow.bind(h.store)
+    vi.spyOn(h.store, "getWorkflow").mockImplementationOnce(async (...args) => { await gate; return original(...args) })
+    const oldEnd = h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "旧异步结果" }] })
+    await expect(h.runtime.wfRunNode(caller, { nodeId: "n-a1" })).rejects.toMatchObject({ code: "WF_BUSY" })
+    await h.runtime.stopRun(entry.snapshot.id)
+    await h.runtime.resumeRun({ sessionId: "session-1", flowId: "flow-1" })
+    h.runner.nextReplacedChildId = "child-1"
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    release()
+    await oldEnd
+    expect(h.runtime.childMetaFor("child-1")).toMatchObject({ retired: true })
+    expect(h.runtime.runForChild("child-1")).toBeNull()
+    const current = h.runtime.activeRunForSession("session-1")!
+    expect(current.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "running", childId: "child-2", attempts: 1, output: "" })
+    expect(current.inflight.has("child-2")).toBe(true)
+  })
+})
+
+it("test_settlement_same_child_new_run_rejects_previous_host_epoch", async () => {
+  const h = await makeHarness()
+  await start(h, makeFlow())
+  h.runtime.handleSubagentStart({ id: "child-1", runId: "epoch-old" })
+  await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+  await h.runtime.stopRun("run-1")
+  await h.runtime.resumeRun({ sessionId: "session-1", flowId: "flow-1" })
+  h.runner.startNodeTask = async (input) => {
+    h.runner.calls.push(input)
+    h.runtime.handleSubagentStart({ id: "child-1", runId: "epoch-new" })
+    return { childId: "child-1", created: false }
+  }
+  await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+  const entry = h.runtime.activeRunForSession("session-1")!
+  await h.runtime.handleSubagentEnd({ id: "child-1", runId: "epoch-old", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "旧运行结论" }] })
+  expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "running", childId: "child-1", output: "" })
+  expect(entry.inflight.has("child-1")).toBe(true)
+  await h.runtime.handleSubagentEnd({ id: "child-1", runId: "epoch-new", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "新运行结论" }] })
+  expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "ok", output: "新运行结论" })
+})
+
+it("test_settlement_cold_reuse_end_before_registration_is_buffered_for_current_epoch", async () => {
+  const h = await makeHarness()
+  const { entry } = await start(h, makeFlow())
+  h.runtime.handleSubagentStart({ id: "child-1", runId: "epoch-1" })
+  await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+  await h.runtime.handleSubagentEnd({ id: "child-1", runId: "epoch-1", stopReason: "completed" })
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  try {
+    h.runner.startNodeTask = async () => {
+      h.runtime.handleSubagentStart({ id: "child-1", runId: "epoch-2" })
+      await h.runtime.handleSubagentEnd({ id: "child-1", runId: "epoch-2", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "本轮快速结束" }] })
+      return { childId: "child-1", created: false }
+    }
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await vi.advanceTimersByTimeAsync(10)
+    await vi.waitFor(() => expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "ok", attempts: 2, output: "本轮快速结束" }))
+  } finally { vi.useRealTimers() }
 })

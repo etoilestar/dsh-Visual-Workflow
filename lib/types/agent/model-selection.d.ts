@@ -43,6 +43,8 @@ export interface ModelSelectionSetup {
      * 冷恢复只依据持久描述符重建子代理路由，官方不接受成员级路由，故选择必须由本模块留存。
      */
     remember(childId: string, selection: ModelSelectionLike): void;
+    /** 仅明确退役时删除冷恢复状态，普通回合结束保留。 */
+    forget?(childId: string): void;
     /**
      * 重发布时按 childId 重装已记住的选择（宿主在 `agent/created` 调用；无记录则不做任何事）。
      */
