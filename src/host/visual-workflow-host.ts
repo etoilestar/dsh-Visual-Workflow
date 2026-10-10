@@ -20,7 +20,6 @@ import {
   CordisToolsView,
   NodeAgentRunner,
   agentsServiceLike,
-  childVisibilityContribution,
   createChildPromptSetup,
   createChildToolFilterSetup,
   createModelSelectionSetup,
@@ -176,10 +175,13 @@ export class VisualWorkflowHost extends Service {
       modelSelection: this.modelSelection,
       // 角色 Prompt 读取（agent 能力经缝注入：编排器不反向依赖 agent 运行时）
       resolveRolePrompt: (node) => resolveRolePrompt(node),
+      workingDirectory: async (sessionId) => (await sessionCwdResolver(ctx)(sessionId)) ?? undefined,
+      authorizedInputFiles: async (sessionId) => this.agents.authorizedInputFiles(sessionId),
       config: {
         outputFullLimit: config.outputFullLimit,
         documentTextLimit: config.documentTextLimit,
         runIdleTimeoutMs: config.runIdleTimeoutMs,
+        runExecutionTimeoutMs: config.runExecutionTimeoutMs,
         retryLimitDefault: config.retryLimitDefault,
         reactIterationLimitDefault: config.reactIterationLimitDefault,
         wfAskAgentTimeoutMs: config.wfAskAgentTimeoutMs,
@@ -251,17 +253,15 @@ export class VisualWorkflowHost extends Service {
    *   - 角色提示词段 + 开关过滤。
    * 因在 `agent/created`（agents.create 发布、首轮组装之前串行 await）执行，
    * 四类贡献在首轮即可见——修复「系统提示词/工具第二轮才更新」的同源时序 BUG。
-   * 单个贡献失败则跳过（其余照装），返回的 disposer 为已成功安装贡献的合并撤销。
+   * 权限贡献失败会阻止创建；可选贡献失败只降级对应能力。
    */
-  private installChildScope(childCtx: unknown, agentId: string): () => void {
+  private installChildScope(childCtx: unknown, agentId: string, agent: unknown): () => void {
     const contributions: Array<(context: unknown) => () => void> = [
-      childVisibilityContribution(),
       this.reactGuard.contribution,
       this.modelSelection.contribution,
-      this.childToolFilter.contribution,
       this.childPrompt.contribution,
     ]
-    const disposers: Array<() => void> = []
+    const disposers: Array<() => void> = [this.childToolFilter.restore(agentId, childCtx, agent)]
     for (const contribution of contributions) {
       try {
         const dispose = contribution(childCtx)
@@ -272,20 +272,13 @@ export class VisualWorkflowHost extends Service {
     }
     // 重发布（冷恢复）时把已记住的成员级组成写回：创建窗口内写入的模型选择与工具白名单
     // 不跨子代理销毁存活，而官方冷恢复只依据持久描述符重建路由与工具面，故必须由我方留存重装。
-    // 无记录（普通节点子代理）时两处调用都是空操作。
     try {
       this.modelSelection.restore(agentId, childCtx)
     } catch {
       // 重装失败：模型选择退回官方路由，不阻断其余贡献
     }
-    try {
-      const disposeToolFilter = this.childToolFilter.restore(agentId, childCtx)
-      if (typeof disposeToolFilter === 'function') disposers.push(disposeToolFilter)
-    } catch {
-      // 重装失败：工具可见性退回继承面，不阻断其余贡献
-    }
     return () => {
-      for (const dispose of disposers) {
+      for (const dispose of disposers.reverse()) {
         try {
           dispose()
         } catch {
@@ -318,28 +311,39 @@ export class VisualWorkflowHost extends Service {
    *
    * 【0.1.7-rc.1 取证】事件名与 payload 见 `src/host/events.d.ts` 的 `agent/created` 条目；
    * 官方对该事件**按序 await 监听器，且监听器抛错会让创建失败**（dsh-agent/lib/index.js
-   * L579 的 `ctx.serial`），故本处理器全程同步且不抛错（贡献安装由 installChildScope
-   * 逐项 try/catch 隔离）。根 Agent 创建（source='startup'）同样触发本事件：此时
+   * L579 的 `ctx.serial`），故必须返回装配 Promise，权限失败沿官方创建链回滚。根 Agent 创建（source='startup'）同样触发本事件：此时
    * `peekPending()` 为空且 `childPromptStates` 无该 id → 直接返回，无副作用。
    */
-  private onAgentCreated(payload: { agent?: { id?: unknown; ctx?: unknown } }): void {
+  private async onAgentCreated(payload: { agent?: { id?: unknown; ctx?: unknown; session?: { events?: unknown[]; append?: (type: string, data: unknown) => unknown } } }): Promise<void> {
     const agent = payload?.agent
-    if (!agent || typeof agent !== 'object') return
-    const childCtx = agent.ctx
-    if (!childCtx) return
-    const agentId = String(agent.id ?? '')
+    if (!agent?.ctx) return
+    const agentId = String(agent.id ?? "")
     if (!agentId) return
-    // 状态优先级：仍在 withPending（首建）→ 用本次 pending；否则用首建持久化的对应该子代理状态（重发布/恢复）
-    const state = this.childPrompt.peekPending() ?? this.childPromptStates.get(agentId)
-    if (!state) return // 非视觉工作流子代理（既不处于首建 pending，也不是已知视觉工作流子代理）
-    this.dropChildScope(agentId) // 同 id 二次发布先撤销旧装配，防重复
-    // 用 withPending 包裹，使 contribution 读到该 state（首建嵌套于 runner 的 pending，取最内层值）
-    void this.childPrompt.withPending(state, async () => {
-      const dispose = this.installChildScope(childCtx, agentId)
-      if (typeof dispose === 'function') this.childScopeDisposers.set(agentId, dispose)
-      return dispose
-    })
-    this.childPromptStates.set(agentId, state)
+    const persisted = [...(agent.session?.events ?? [])].reverse().find((event) =>
+      (event as { type?: unknown } | null)?.type === "visual-workflow/child-composition",
+    ) as { data?: { prompt?: ChildPromptState; allow?: string[] } } | undefined
+    const pending = this.childPrompt.peekPending()
+    const state = pending ?? this.childPromptStates.get(agentId) ?? persisted?.data?.prompt
+    if (!state) return
+    const allow = pending ? this.childToolFilter.peekPending?.() : persisted?.data?.allow
+    this.dropChildScope(agentId)
+    if (pending || persisted?.data) this.childToolFilter.remember(agentId, allow)
+    // 创建事件由官方串行 await；权限错误必须让创建回滚，不能脱离事件链吞掉 Promise。
+    try {
+      await this.childPrompt.withPending(state, async () => {
+        const dispose = this.installChildScope(agent.ctx, agentId, agent)
+        this.childScopeDisposers.set(agentId, dispose)
+      })
+      if (pending && agent.session?.append) {
+        agent.session.append("visual-workflow/child-composition", { prompt: state, ...(allow === undefined ? {} : { allow: [...allow] }) })
+      }
+      this.childPromptStates.set(agentId, state)
+    } catch (error) {
+      this.dropChildScope(agentId)
+      this.childToolFilter.remember(agentId, undefined)
+      this.childPromptStates.delete(agentId)
+      throw error
+    }
   }
 
   /**
@@ -355,6 +359,7 @@ export class VisualWorkflowHost extends Service {
     const agentId = String(payload?.agent?.id ?? '')
     if (!agentId) return
     this.dropChildScope(agentId)
+    this.orchestrator.discardPendingChildRoute(agentId)
   }
 
   /** 按会话 id 取子代理 agent（wf_ask_agent 投递缝用；转发至 agents 适配）。 */
@@ -492,6 +497,13 @@ export class VisualWorkflowHost extends Service {
     // ctx.on 随本 fiber 自动反注册，无需手动 removeListener。
     this.ctx.on('subagent/end', (payload) => this.onSubagentEnd(payload))
     this.ctx.on('agent/error', (payload) => this.onAgentError(payload))
+    this.ctx.on("agent/request", async (payload, next) => {
+      const route = await next()
+      const agent = (payload as { agent?: { id?: unknown } } | null)?.agent
+      const agentId = String(agent?.id ?? "")
+      await this.orchestrator.recordModelRoute(agentId, route, { pendingChild: this.childPromptStates.has(agentId) })
+      return route
+    })
     this.ctx.on('agent/created', (payload) => this.onAgentCreated(payload))
     this.ctx.on('agent/disposed', (payload) => this.onAgentDisposed(payload))
     this.ctx.on('agent/status', (payload) => this.onAgentStatus(payload))
@@ -704,9 +716,12 @@ export class VisualWorkflowHost extends Service {
     if (this._disposed) return
     const sessionId = String(payload?.agent?.id ?? '')
     if (!sessionId) return
-    if (!this.orchestrator.activeRunForSession(sessionId)) return
-    const message = payload?.error instanceof Error ? payload.error.message : String(payload?.error ?? '')
-    this.ctx.logger.warn(`[visual-workflow] 父代理回合报错（不终止运行，交由看护判定终态）：${message}`)
+    if (!this.orchestrator.activeRunForSession(sessionId)) {
+      void this.orchestrator.recordChildError(sessionId, payload.error).catch(() => this.ctx.logger.warn("[visual-workflow] 子代理错误诊断持久化失败"))
+      return
+    }
+    void this.orchestrator.recordParentError(sessionId, payload.error).catch(() => this.ctx.logger.warn("[visual-workflow] 父代理错误诊断持久化失败"))
+    this.ctx.logger.warn(`[visual-workflow] 父代理回合报错：sessionId=${sessionId}，交由看护判定终态`)
   }
 
   /**

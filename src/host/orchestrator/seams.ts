@@ -85,6 +85,7 @@ export interface GroupMemberPlan {
 
 /** 协作组启动入参。 */
 export interface GroupStartInput {
+  runId?: string
   sessionId: string
   flowId: string
   /**
@@ -100,6 +101,9 @@ export interface GroupStartInput {
   members: GroupMemberPlan[]
   /** 运行级取消信号（运行停止/终止/插件卸载）。 */
   signal: AbortSignal
+  /** 按实际派发顺序登记尝试和会话，保留部分创建失败之前已经启动的成员。 */
+  onMemberStarting?: (nodeId: string) => Promise<void>
+  onMemberStarted?: (member: GroupMemberStarted) => Promise<void>
 }
 
 /** 已启动或已复用的协作组成员。 */
@@ -121,6 +125,8 @@ export interface GroupStartResult {
 
 /** 节点任务启动入参（任务块与节点级参数，经子代理引擎透传官方配置）。 */
 export interface NodeStartInput {
+  runId?: string
+  attempt?: number
   sessionId: string
   flowId: string
   /**
@@ -204,6 +210,7 @@ export interface OrchestratorConfig {
   documentTextLimit: number
   /** 运行空闲超时毫秒数（无 in-flight 时看护门限）。 */
   runIdleTimeoutMs: number
+  runExecutionTimeoutMs?: number
   /** 单节点回流重试次数默认上限（节点未配置时兜底）。 */
   retryLimitDefault: number
   /** ReAct 迭代次数默认上限（节点未配置时兜底）。 */

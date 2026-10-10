@@ -4,8 +4,7 @@
 // （中止控制器/尽力中断子代理/写终态/释放锁）、用户停止与父代理出错自动 failed。
 // 方法体逐字移动。
 
-import { terminalizeNodes } from './snapshot.js'
-import { messageOf } from './errors.js'
+import { failureOf, setNodeStatus, terminalizeNodes } from './snapshot.js'
 import type { RunEntry, TerminateOptions } from './run-entry.js'
 import { RuntimeObserve } from './runtime-observe.js'
 
@@ -37,6 +36,8 @@ export class RuntimeLifecycle extends RuntimeObserve {
     snapshot.status = options.status
     snapshot.summary = options.summary
     snapshot.endedAt = this.isoNow()
+    snapshot.termination = options.termination ?? { source: options.abortReason === "user-stop" ? "user_stop" : options.abortReason === "idle-timeout" ? "idle_timeout" : "runtime", stopReason: options.abortReason ?? options.status }
+    this.log().info(JSON.stringify({ runId: snapshot.id, phase: "run_finish", status: snapshot.status, source: snapshot.termination.source, stopReason: snapshot.termination.stopReason, errorCode: snapshot.termination.failure?.code }))
     terminalizeNodes(snapshot, this.now(), options.status === 'stopped' ? 'stop' : 'interrupt')
     this.rejectWaiters(entry)
     this.rejectAsks(entry)
@@ -76,11 +77,32 @@ export class RuntimeLifecycle extends RuntimeObserve {
     return true
   }
 
+  async recordChildError(childId: string, error: unknown): Promise<void> {
+    const entry = this.runForChild(childId)
+    const meta = this.childMetaFor(childId)
+    if (!entry || !meta || meta.retired) return
+    const node = entry.snapshot.nodes.find((item) => item.nodeId === meta.nodeId)
+    if (!node) return
+    setNodeStatus(entry.snapshot, node.nodeId, node.status, { failure: failureOf(error, "child_execute", "WF_CHILD_EXECUTION_FAILED", this.now()), now: this.now() })
+    await this.persistWarn(entry)
+  }
+
+  async recordParentError(sessionId: string, error: unknown): Promise<void> {
+    const entry = this.activeRunForSession(sessionId)
+    if (!entry) return
+    entry.snapshot.parentErrors ??= []
+    entry.snapshot.parentErrors.push(failureOf(error, "parent_execute", "WF_PARENT_EXECUTION_FAILED", this.now()))
+    await this.persistWarn(entry)
+  }
+
   /** 父代理回合以 error 结束（编排已死）→ 自动把运行标记为 failed。 */
   async failRunForParentError(entry: RunEntry, error: unknown): Promise<void> {
-    const message = messageOf(error)
-    const summary = message ? `编排父代理执行出错：${message}` : '编排父代理执行出错（未知错误）'
-    await this.terminateRun(entry, { status: 'failed', summary, abortReason: 'parent-turn-error' })
+    const failure = failureOf(error, "parent_execute", "WF_PARENT_EXECUTION_FAILED", this.now())
+    const message = failure.message
+    const summary = failure.code === "CONTEXT_WINDOW_EXCEEDED"
+      ? `父代理上下文超过实际模型窗口（CONTEXT_WINDOW_EXCEEDED）：${message}。请检查 DSH token meter、自动压缩配置及 compaction 事件，使用官方压缩后再恢复；本插件未丢弃会话历史。`
+      : message ? `编排父代理执行出错：${message}` : '编排父代理执行出错（未知错误）'
+    await this.terminateRun(entry, { status: 'failed', summary, abortReason: 'parent-turn-error', termination: { source: "parent_error", stopReason: "error", failure } })
   }
 
 }

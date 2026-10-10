@@ -83,6 +83,11 @@ describe('路由注册与错误映射', () => {
     expect(responses[8].status).toBe(422)
     expect(JSON.parse(responses[8].body)).toMatchObject({ ok: false, error: { code: 'TRANSFER_INVALID_BUNDLE' } })
 
+    h.host.orchestrator.startRun = async () => { throw Object.assign(new Error("file is not authorized"), { code: "WF_INPUT_FILE_UNAUTHORIZED" }) }
+    await registered!.handler!(reqOf("POST", "/visual-workflow/run", JSON.stringify({ args: { sessionId: "session-1", flowId: "flow-code-1" } })), res)
+    expect(responses[9].status).toBe(403)
+    expect(JSON.parse(responses[9].body)).toMatchObject({ ok: false, error: { code: "WF_INPUT_FILE_UNAUTHORIZED" } })
+
     // disposer 生效
     dispose()
     expect(registered).toBeNull()

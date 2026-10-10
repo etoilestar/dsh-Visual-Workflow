@@ -41,6 +41,9 @@ export interface NodeTaskBlockParams {
      * 官方读取工具自行读取（不直通模型上下文）。可为空。
      */
     filePaths: string[]
+    workingDirectory?: string
+    inputSource?: 'ctx' | 'workspace' | 'runtime'
+    outputFiles?: string[]
     /**
      * 数据库工具说明：存在 db-in 连线时说明 wf_db_query 三模式（search/query/schema，
      * 只读）用法；无 db-in 连线时为空字符串。
@@ -170,10 +173,14 @@ export function buildNodeTaskBlock(params: NodeTaskBlockParams): string {
 
   if (facts.filePaths.length > 0) {
     midParts.push('', '文件路径索引（自行读取）：')
+    midParts.push('路径存在不代表已读取内容；请实际调用已授权工具读取，不要编造文件数据。')
     for (const filePath of facts.filePaths) {
       midParts.push(`- ${filePath}`)
     }
   }
+  if (facts.workingDirectory) midParts.push('', `本次会话工作目录：${facts.workingDirectory}`)
+  if (facts.inputSource) midParts.push(`声明的输入来源：${facts.inputSource}。流程线只表示执行顺序，输入数据以显式 ctx、工作区文件或运行绑定为准。`)
+  if (facts.outputFiles?.length) midParts.push('', '声明的输出文件（完成时由运行时核验实际文件）：', ...facts.outputFiles.map((path) => `- ${path}`))
 
   if (facts.inputContract.trim()) {
     midParts.push('', '输入结构（你应当收到的输入）：', facts.inputContract.trim())

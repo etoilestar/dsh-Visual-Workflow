@@ -26,7 +26,7 @@ function facts(overrides: Partial<RunReflectionFacts> = {}): RunReflectionFacts 
 }
 
 describe('复盘指令文案', () => {
-  it('首段含【复盘】标记与运行身份；机器事实只列状态/耗时/节点数三项', () => {
+  it('首段含【复盘】标记与运行身份；机器事实保留状态/耗时/节点数并标明未采集项', () => {
     const text = buildReflectionPrompt(facts())
     expect(text).toContain(REFLECTION_MARKER)
     expect(text).toContain('测试流程')
@@ -34,7 +34,7 @@ describe('复盘指令文案', () => {
     expect(text).toContain('- run 状态：已完成')
     expect(text).toContain('- 总耗时：2 分 5.4 秒')
     expect(text).toContain('- 节点总数：6')
-    expect(text).toContain('以上三项是本次运行的全部机器事实')
+    expect(text).toContain('以上内容是本次运行已采集的机器事实')
   })
 
   it('不出现未采集事实（token 用量 / 上下文健康度）', () => {
@@ -76,7 +76,7 @@ describe('复盘指令文案', () => {
     expect(text).toContain('约 500 个中文字符以内')
     expect(text).toContain('insight 尽量是单句结论')
     expect(text).toContain('语义重复的经验必须合并成一条')
-    expect(text).toContain('提交空数组也是正确结果')
+    expect(text).toContain('不调用 wf_experience，不提交空数组')
   })
 
   it('收尾动作指向 wf_experience 并说明入参形状', () => {
@@ -111,4 +111,15 @@ describe('复盘指令文案', () => {
     expect(buildReflectionPrompt(facts({ status: 'stopped', durationMs: null })))
       .toBe(buildReflectionPrompt(facts({ status: 'stopped', durationMs: null })))
   })
+  it('零业务完成只呈现故障事实；双语均要求空经验不调用工具', () => {
+    const f = facts({ status: 'failed', runSummary: '父模型超时', completedNodes: [], failedNodes: [], skippedNodes: ['load_data'], errorCodes: ['MODEL_TIMEOUT'] })
+    const text = buildReflectionPrompt(f)
+    expect(text).toContain('完成节点：[]')
+    expect(text).toContain('跳过节点：["load_data"]')
+    expect(text).toContain('MODEL_TIMEOUT')
+    expect(text).toContain('无完成节点时不得称业务节点已顺利执行')
+    expect(text).toContain('1~8 条候选经验')
+    expect(buildReflectionPrompt({ ...f, systemLanguage: 'English' })).toContain('without calling wf_experience; do not submit an empty array')
+  })
+
 })

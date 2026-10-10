@@ -7,17 +7,18 @@
 // paused/stopped/interrupted 断点时自动续跑接管，不再以 WF_PAUSED/WF_STOPPED 阻断。
 
 import { WF_RUN_NODE_WAIT } from '../shared/protocol.js'
-import { nodeById } from '../graph/index.js'
+import { isFlowLine, mainNodeIdOf, nodeById } from '../graph/index.js'
 import { DEFAULT_SYSTEM_LANGUAGE } from '../system-language.js'
 import { collabPromptOf, labelOf } from './graph-facts.js'
 import { effectiveReactLimitOf, effectiveRetryLimitOf, effectiveThinkingOf } from './node-params.js'
 import { buildNodeBlocks } from './task-blocks.js'
 import { WfError } from './errors.js'
 import { createWaiter, type FinishArgs, type FinishResult, type RunEntry, type RunNodeArgs, type RunNodeResult, type Waiter } from './run-entry.js'
-import { setNodeStatus, statusText, terminalizeNodes } from './snapshot.js'
+import { failureOf, setNodeStatus, statusText, terminalizeNodes } from './snapshot.js'
 import { GLOBAL_RUN_CALL_LIMIT, type CallerInfo, type GroupMemberPlan, type GroupStartResult } from './seams.js'
 import { RuntimeLaunch } from './runtime-launch.js'
 import type { GroupNode, WorkflowDocument } from '../shared/graph-model.js'
+import { preflightNodeInputs } from './execution-inputs.js'
 
 export class RuntimeExecute extends RuntimeLaunch {
   // ---- wf_run_node ----------------------------------------------------------
@@ -141,14 +142,10 @@ export class RuntimeExecute extends RuntimeLaunch {
       await this.deps.dbIndexer.ensureIndexes(resolvedNodeId, flow)
     }
 
-    setNodeStatus(run.snapshot, resolvedNodeId, 'running', { attempts: attempt, now: this.now() })
-    const blocks = buildNodeBlocks({
-      flow,
-      node,
-      snapshot: run.snapshot,
-      documentTextLimit: this.deps.config.documentTextLimit,
-      systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
-    })
+    setNodeStatus(run.snapshot, resolvedNodeId, 'running', { attempts: attempt, now: this.now(), provider: node.data.provider || run.snapshot.parentRoute?.provider, model: node.data.model || run.snapshot.parentRoute?.model })
+    this.log().info(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, attempt, phase: "child_start", status: "requested", provider: node.data.provider, model: node.data.model }))
+    await this.persistWarn(run)
+
 
     // wait:true 阻塞等待器必须先于启动注册（subagent/end 可能在启动返回前到达）
     const waitRequested = args?.wait === true
@@ -163,7 +160,17 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
 
     try {
+      await preflightNodeInputs(flow, node, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(run.snapshot.sessionId))
+      const blocks = buildNodeBlocks({
+      flow,
+      node,
+      snapshot: run.snapshot,
+      documentTextLimit: this.deps.config.documentTextLimit,
+      systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
+    })
       const { childId, replacedChildId } = await this.deps.runner.startNodeTask({
+        runId: run.snapshot.id,
+        attempt,
         sessionId: run.snapshot.sessionId,
         flowId: run.snapshot.flowId,
         mode: run.snapshot.mode,
@@ -186,13 +193,22 @@ export class RuntimeExecute extends RuntimeLaunch {
         const retired = this.childIndex.get(replacedChildId)
         if (retired) this.childIndex.set(replacedChildId, { ...retired, retired: true })
       }
+      setNodeStatus(run.snapshot, resolvedNodeId, "running", { childId, now: this.now() })
       run.inflight.add(childId)
       this.childIndex.set(childId, { sessionId: run.snapshot.sessionId, flowId: run.snapshot.flowId, nodeId: resolvedNodeId })
       this.childByNode.set(resolvedNodeId, childId)
+      this.applyPendingChildRoute(run, resolvedNodeId, childId)
+      await this.persistWarn(run)
+      this.log().info(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, childId, attempt, phase: "child_execute", status: "started" }))
       if (!waitRequested) return { nodeId: resolvedNodeId, status: 'started', childId }
     } catch (error) {
       if (waiter) run.waiters.delete(waitKey)
-      if (run.snapshot.status === 'running') setNodeStatus(run.snapshot, resolvedNodeId, 'fail', { attempts: attempt, now: this.now() })
+      if (run.snapshot.status === "running") {
+        const failure = failureOf(error, "child_start", "WF_CHILD_START_FAILED", this.now())
+        setNodeStatus(run.snapshot, resolvedNodeId, "fail", { attempts: attempt, now: this.now(), failure, stopReason: "start-error", recordTurn: true })
+        await this.persistWarn(run)
+        this.log().warn(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, attempt, phase: failure.phase, errorCode: failure.code, status: "fail" }))
+      }
       throw error
     }
 
@@ -297,9 +313,33 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
 
     setNodeStatus(run.snapshot, groupId, 'running', { attempts: attempt, now: this.now() })
+    await this.persistWarn(run)
+    const started = new Set<string>()
+    const attempted = new Set<string>()
+    const onMemberStarting = async (nodeId: string): Promise<void> => {
+      if (attempted.has(nodeId)) return
+      attempted.add(nodeId)
+      const count = (run.attempts.get(nodeId) ?? 0) + 1
+      run.attempts.set(nodeId, count)
+      const member = plans.find((plan) => plan.node.id === nodeId)?.node
+      setNodeStatus(run.snapshot, nodeId, 'running', { attempts: count, now: this.now(), provider: member?.data.provider || run.snapshot.parentRoute?.provider, model: member?.data.model || run.snapshot.parentRoute?.model })
+      await this.persistWarn(run)
+      if (member) await preflightNodeInputs(flow, member, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(sessionId))
+    }
+    const onMemberStarted = async (member: GroupStartResult['members'][number]): Promise<void> => {
+      await onMemberStarting(member.nodeId)
+      started.add(member.nodeId)
+      setNodeStatus(run.snapshot, member.nodeId, 'running', { childId: member.childId, now: this.now() })
+      run.inflight.add(member.childId)
+      this.childIndex.set(member.childId, { sessionId, flowId: run.snapshot.flowId, nodeId: member.nodeId })
+      this.childByNode.set(member.nodeId, member.childId)
+      this.applyPendingChildRoute(run, member.nodeId, member.childId)
+      await this.persistWarn(run)
+    }
     let result: GroupStartResult | null
     try {
       result = await startGroup.call(runner, {
+        runId: run.snapshot.id,
         sessionId,
         flowId: run.snapshot.flowId,
         mode: 'mode1',
@@ -307,10 +347,17 @@ export class RuntimeExecute extends RuntimeLaunch {
         collabPrompt: String(group.data.collabPrompt ?? ''),
         members: plans,
         signal: run.controller.signal,
+        onMemberStarting,
+        onMemberStarted,
       })
     } catch (error) {
       if (run.snapshot.status === 'running') {
-        setNodeStatus(run.snapshot, groupId, 'fail', { attempts: attempt, now: this.now() })
+        const failure = failureOf(error, 'child_start', 'WF_TEAM_START_FAILED', this.now())
+        setNodeStatus(run.snapshot, groupId, 'fail', { attempts: attempt, now: this.now(), failure, stopReason: 'start-error', recordTurn: true })
+        for (const nodeId of attempted) if (!started.has(nodeId)) {
+          setNodeStatus(run.snapshot, nodeId, 'fail', { now: this.now(), failure, stopReason: 'start-error', recordTurn: true })
+        }
+        await this.persistWarn(run)
       }
       throw error
     }
@@ -326,9 +373,7 @@ export class RuntimeExecute extends RuntimeLaunch {
 
     // 登记成员会话归属：成员 subagent/end 据此回写各自节点状态（与单节点路径同一张表）
     for (const member of result.members) {
-      run.inflight.add(member.childId)
-      this.childIndex.set(member.childId, { sessionId, flowId: run.snapshot.flowId, nodeId: member.nodeId })
-      this.childByNode.set(member.nodeId, member.childId)
+      if (!started.has(member.nodeId)) await onMemberStarted(member)
     }
     await this.persistWarn(run)
     return {
@@ -369,10 +414,45 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
     const snapshot = run.snapshot
     if (snapshot.status !== 'running') return { ok: true, runId: snapshot.id, status: snapshot.status, idempotent: true }
-    const isFailed = args?.status === 'failed'
+    const flow = await this.currentResolvedFlow(run)
+    if (snapshot.status !== "running") return { ok: true, runId: snapshot.id, status: snapshot.status, idempotent: true }
+    if (args?.status !== "failed" && snapshot.nodes.some((record) => record.status === "running")) {
+      throw new WfError("仍有已启动节点未结算，不能宣称完成；请等待结算或明确失败收尾", "WF_RUN_INCOMPLETE")
+    }
+    const lines = flow.lines.filter(isFlowLine)
+    const records = new Map(snapshot.nodes.map((record) => [record.nodeId, record]))
+    const idOf = (id: string) => mainNodeIdOf(flow, id) ?? id
+    const settled = (id: string) => ["ok", "react-capped", "armed"].includes(records.get(idOf(id))?.status ?? "")
+    const selected = new Set(snapshot.nodes.filter((record) => record.attempts > 0 || settled(record.nodeId)).map((record) => record.nodeId))
+    // 无执行次数的 pause/group 等结构节点也可能承载已选择的业务路径。
+    for (const id of selected) for (const line of lines) if (!line.condition && idOf(line.target) === id) selected.add(idOf(line.source))
+    // 无条件可达的路径是必需路径；条件选择仍由父代理决定，不把未选分支全部强制执行。
+    const required = new Set(flow.nodes.filter((node) => node.kind === "start").map((node) => node.id))
+    for (const id of required) for (const line of lines) {
+      const target = idOf(line.target)
+      if (idOf(line.source) === id && (!line.condition || selected.has(target))) required.add(target)
+    }
+    const requiredFailures = snapshot.nodes.filter((record) => {
+      if (record.status !== 'fail') return false
+      const recovered = lines.some((line) => idOf(line.source) === record.nodeId && line.condition && line.condition.type !== "pass" && settled(line.target))
+      return required.has(record.nodeId) && !recovered
+    })
+    if (args?.status !== "failed" && requiredFailures.length === 0) {
+      const missing = lines.filter((line) => !line.condition && settled(line.target) && (records.get(idOf(line.target))?.attempts ?? 0) > 0).filter((line) => {
+        const target = nodeById(flow, idOf(line.target))
+        if (!target || !["agent", "parent", "group"].includes(target.kind)) return false
+        const source = nodeById(flow, idOf(line.source))
+        return source && ["agent", "parent", "group", "pause"].includes(source.kind) && !settled(line.source)
+      })
+      if (missing.length) throw new WfError(`已完成节点的必需前驱尚未完成：${missing.map((line) => line.source).join(", ")}`, "WF_RUN_INCOMPLETE")
+    }
+    const isFailed = args?.status === 'failed' || requiredFailures.length > 0
     snapshot.status = isFailed ? 'failed' : 'completed'
     snapshot.summary = String(args?.summary ?? '')
+    if (args?.status !== 'failed' && requiredFailures.length) snapshot.summary = `必需执行路径的节点失败：${requiredFailures.map((record) => record.nodeId).join(', ')}；${snapshot.summary}`
     snapshot.endedAt = this.isoNow()
+    snapshot.termination = { source: "parent_finish", stopReason: isFailed ? "failed" : "completed", ...(isFailed ? { failure: failureOf({ message: snapshot.summary }, "run_finish", "WF_PARENT_FINISH_FAILED", this.now()) } : {}) }
+    this.log().info(JSON.stringify({ runId: snapshot.id, phase: "run_finish", status: snapshot.status, source: "parent_finish", errorCode: snapshot.termination.failure?.code }))
     terminalizeNodes(snapshot, this.now(), isFailed ? 'fail' : 'completed')
     await this.persistWarn(run)
     // 终态写盘之后、释放内存条目之前：向父代理注入复盘指令（best-effort，失败只告警）

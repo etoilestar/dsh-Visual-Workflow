@@ -1,5 +1,6 @@
 import type { RunReflectionFacts } from '../prompts/index.js';
 import type { OrchestratorLogger, RootAgentLike, RootInjectedMessage } from './seams.js';
+import type { RunSnapshot } from '../shared/types.js';
 /** 注入文案的稳定来源标记（排障与审计用；注入文本内的锚点见 REFLECTION_MARKER）。 */
 export declare const REFLECTION_MESSAGE_SOURCE = "visual-workflow-reflection";
 /** 终态注入所需的最小运行事实（由快照派生；派生逻辑是纯函数，可单测）。 */
@@ -16,6 +17,9 @@ export interface RunReflectionFactsInput {
     endedAt: string | null;
     /** 快照节点数。 */
     nodeCount: number;
+    summary?: string;
+    nodes?: RunSnapshot['nodes'];
+    errorCodes?: string[];
     /** 系统语言名（可为空串 → 提示词按中文措辞）。 */
     systemLanguage?: string;
 }

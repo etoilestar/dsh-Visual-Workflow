@@ -10,6 +10,7 @@ import type { RunSnapshot } from '../shared/types.js';
 export declare const RESUMABLE_STATUSES: readonly ["paused", "interrupted", "stopped"];
 /** 断点续跑入参（runResume 端点与 run 端点自动续跑共用）。 */
 export interface ResumeInput {
+    fileBindings?: unknown;
     sessionId: string;
     flowId: string;
     /** 指定恢复的旧 run id；缺省取该工作流最近的可恢复记录。 */
@@ -45,3 +46,5 @@ export declare function buildResumedSnapshot(input: {
     mode: 'mode1' | 'mode2';
     now?: number;
 }): RunSnapshot;
+/** 根据流程依赖找恢复调度前沿；结构节点不作为业务 Agent，暂停门仍需显式调度。 */
+export declare function schedulableResumeNodeIds(flow: WorkflowDocument, snapshot: RunSnapshot): string[];

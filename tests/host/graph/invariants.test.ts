@@ -355,7 +355,7 @@ describe('规则矩阵（每个 code 一例）', () => {
     expect(issues.find((i) => i.code === 'cannotReachEnd')?.level).toBe('warning')
   })
 
-  it('dataNodeIncomplete：数据库无路径无连接 / 受管文件未选文件', () => {
+  it('dataNodeIncomplete 阻止无配置数据库；fileInputUnbound 允许规划期文件占位', () => {
     const doc = flow(
       [stage('s', 'start'), agent('a1'), dbNode('d1'), fileNode('f1', { fileKind: 'file' }), stage('e', 'end')],
       [
@@ -367,8 +367,17 @@ describe('规则矩阵（每个 code 一例）', () => {
     )
     const issues = check({ flow: doc })
     const incomplete = issues.filter((i) => i.code === 'dataNodeIncomplete')
-    expect(incomplete).toHaveLength(2)
-    expect(incomplete.flatMap((i) => i.nodeIds ?? []).sort()).toEqual(['d1', 'f1'])
+    expect(incomplete).toHaveLength(1)
+    expect(issues.find((i) => i.code === 'fileInputUnbound')).toMatchObject({ level: 'warning', nodeIds: ['f1'] })
+    expect(incomplete.flatMap((i) => i.nodeIds ?? []).sort()).toEqual(['d1'])
+  })
+
+  it('executionContractInvalid：机器执行契约数组形状错误阻断落盘', () => {
+    const a = agent('a1')
+    if (a.kind !== 'agent') throw new Error('fixture')
+    Object.assign(a.data, { execution: { requiredFiles: 'file.csv' } })
+    const issues = check({ flow: flow([stage('s', 'start'), a, stage('e', 'end')], [line('l1', 's', 'a1'), line('l2', 'a1', 'e')]) })
+    expect(issues.find((i) => i.code === 'executionContractInvalid')).toMatchObject({ level: 'error', nodeIds: ['a1'] })
   })
 
   it('ctxSourceInvalid：上下文入线来自暂停节点', () => {

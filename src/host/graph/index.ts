@@ -98,3 +98,4 @@ export {
 export { metaLimitIssues } from './org-meta-limits.js'
 export { executableUnitCount, groupCount, maxGroupMembers, orgUsageOf } from './org-meta-usage.js'
 export type { OrgUsage } from './org-meta-usage.js'
+export { parseExecutionContract } from './execution-contract.js'

@@ -355,6 +355,9 @@ export declare const zh: {
     historyEmpty: string;
     resumedFrom: string;
     resumeFromNode: string;
+    runDiagnostic: string;
+    runAttempt: string;
+    runTermination: string;
     resumeRun: string;
     newSession: string;
     newSessionHint: string;

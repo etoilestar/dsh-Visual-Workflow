@@ -21,6 +21,7 @@ import {
   type NodeRunner,
   type NodeStartInput,
   type OrchestratorConfig,
+  type OrchestratorDeps,
   type RootAgentLike,
   type RootInjectedMessage,
   type TurnEndInfo,
@@ -238,6 +239,7 @@ export interface Harness {
 /** 装配：临时目录真实 FlowStore + fake 依赖 + 可控时钟与 id 生成。 */
 export async function makeHarness(
   config?: Partial<OrchestratorConfig>,
+  options: Pick<OrchestratorDeps, 'workingDirectory' | 'authorizedInputFiles' | 'logger'> = {},
 ): Promise<Harness> {
   const dir = await mkdtemp(join(tmpdir(), 'vw-orch-'))
   cleanups.push(() => rm(dir, { recursive: true, force: true }))
@@ -254,6 +256,7 @@ export async function makeHarness(
     store,
     runner,
     agents,
+    ...options,
     config: {
       outputFullLimit: 400,
       documentTextLimit: 200,
@@ -263,7 +266,7 @@ export async function makeHarness(
       wfAskAgentTimeoutMs: 500,
       ...config,
     },
-    logger: { warn: (message) => warnings.push(message), info: () => {}, debug: () => {} },
+    logger: options.logger ?? { warn: (message) => warnings.push(message), info: () => {}, debug: () => {} },
     now: () => clock.now,
     newRunId: () => {
       runSeq.n += 1

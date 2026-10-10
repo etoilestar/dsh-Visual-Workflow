@@ -202,7 +202,7 @@ describe('T-011 崩溃恢复：残留临时文件与锁文件', () => {
     // 先成功发布 v1。
     await atomicWriteJson(file, { ver: 1 })
     // 模拟崩溃残留：一个孤儿临时文件（对应一次未完成的写）。
-    const orphanTmp = join(dir, '.tmp-1-aabbccddeeff')
+    const orphanTmp = join(dir, '.tmp-99999999-aabbccddeeff')
     await writeFile(orphanTmp, '半写内容', 'utf8')
 
     // 下次写自动回收残留（atomicWriteJson 内部先 cleanup），随后正常发布 v2。

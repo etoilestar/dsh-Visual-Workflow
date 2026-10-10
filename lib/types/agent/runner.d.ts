@@ -5,7 +5,7 @@ import type { NodeRunner, NodeStartInput, OrchestratorLogger, GroupStartInput, G
 import { type ReactGuardBridge } from './guards.js';
 import type { ModelSelectionSetup } from './model-selection.js';
 import type { ChildPromptSetup } from './prompt-setup.js';
-import type { ChildToolFilterSetup } from './child-tool-filter.js';
+import { type ChildToolFilterSetup } from './child-tool-filter.js';
 import type { AgentTeamsServiceLike } from '../team/index.js';
 /** 子代理复用键：sessionId + flowId + nodeId（跨会话同 id 工作流各自独立）。 */
 export declare function childKey(sessionId: string, flowId: string, nodeId: string): string;
@@ -126,14 +126,7 @@ export interface ToolsView {
     visibleToolNames(sessionId?: string): Promise<string[]>;
     /** 官方 preset 的 standing scope 工具名；服务缺失返回 null（调用方回退）。 */
     presetToolNames(presetId: string): Promise<string[] | null>;
-    /**
-     * 当前会话父代理（root agent）scope 视图工具名（全局层 ∪ 父代理链注册工具）。
-     * 子代理创建时官方 tools.restrict 校验的 restrictableNames 恰为此边界
-     * （官方 view() = 全局层 + 祖先 scope 层注册名；不含注入的 run_code、不含
-     * own scope），因此 allow 名单只能取该集合子集——未注册/幽灵工具
-     * （如 str_replace_editor 仅存在于无关 preset standing scope）由此剔除。
-     * 无 agent/服务缺失回退全局层。
-     */
+    /** 当前会话父代理工具视图，仅供枚举；创建权限必须由实际 child scope 裁决。 */
     agentToolNames(sessionId?: string): Promise<string[]>;
 }
 /**
@@ -177,7 +170,7 @@ export interface ResolveToolsInput {
  * 运行时解析节点工具白名单（架构文档 §4.2 L219）：
  *   - presetId 空 → []（无工具）；
  *   - combo- 前缀 → 组合勾选 ∩ 可见工具集 + 所选 MCP 服务器前缀工具（缺失组合报错）；
- *   - 官方 preset → standing scope 工具名 ∩ 可见（服务缺失回退全部可见）；
+ *   - 官方 preset → standing scope 工具名（无法解析时拒绝启动）；
  *   - db-in 连线存在 → 追加 wf_db_query（§4.4.3 规则 5）；
  *   - CHILD_AGENT_HIDDEN_TOOLS 无条件剔除（即便被组合勾选也不进入子代理）。
  * 注意：无强制追加——wf_ask/wf_ask_agent 仅在组合勾选时进入（PRD §4.4.2 规则 7）。

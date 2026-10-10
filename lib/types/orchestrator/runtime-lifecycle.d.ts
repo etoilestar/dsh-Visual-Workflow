@@ -22,6 +22,8 @@ export declare class RuntimeLifecycle extends RuntimeObserve {
     suspendRun(runId: string, options?: {
         summary?: string;
     }): Promise<boolean>;
+    recordChildError(childId: string, error: unknown): Promise<void>;
+    recordParentError(sessionId: string, error: unknown): Promise<void>;
     /** 父代理回合以 error 结束（编排已死）→ 自动把运行标记为 failed。 */
     failRunForParentError(entry: RunEntry, error: unknown): Promise<void>;
 }

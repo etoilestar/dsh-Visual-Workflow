@@ -400,7 +400,7 @@ describe('resolveDshCommand', () => {
     await writeFile(join(dir, 'dsh.cmd'), '@echo off\n')
     await writeFile(join(dir, 'dsh'), '#!/bin/sh\n')
     const found = resolveDshCommand(`${dir}${process.platform === 'win32' ? ';' : ':'}C:\\other`)
-    expect(found).toBe(join(dir, 'dsh.cmd'))
+    expect(found).toBe(join(dir, process.platform === 'win32' ? 'dsh.cmd' : 'dsh'))
   })
 
   it('PATH 无 dsh → 明确错误', async () => {

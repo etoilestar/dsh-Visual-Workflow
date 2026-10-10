@@ -17,6 +17,7 @@
 
 import type { FlowStore } from '../storage/flow-store.js'
 import type { WorkflowDocument } from '../shared/graph-model.js'
+import { buildFlowDag, mainNodeIdOf, nodeById } from '../graph/index.js'
 import type { NodeRunStatus, RunSnapshot } from '../shared/types.js'
 
 /**
@@ -29,6 +30,7 @@ export const RESUMABLE_STATUSES = ['paused', 'interrupted', 'stopped'] as const
 
 /** 断点续跑入参（runResume 端点与 run 端点自动续跑共用）。 */
 export interface ResumeInput {
+  fileBindings?: unknown
   sessionId: string
   flowId: string
   /** 指定恢复的旧 run id；缺省取该工作流最近的可恢复记录。 */
@@ -87,27 +89,12 @@ export function buildResumedSnapshot(input: {
   const { prev, runId, flow, sessionId, mode } = input
   const now = input.now ?? Date.now()
   const prevByNode = new Map(prev.nodes.map((node) => [node.nodeId, node]))
-  // 续跑起点（Bug 21）：暂停断点继承 prev.resumeFromNodeId（暂停节点 id）；
-  // interrupted（宿主重启中断）时 prev 无暂停点，推断为「首个未完成节点」
-  // （已 ok/react-capped 节点继承后不重跑，恢复从这里继续），避免起点不明确。
-  const resumeFromNodeId = prev.resumeFromNodeId
-    ?? flow.nodes.find((node) => {
-      const prevNode = prevByNode.get(node.id)
-      return !prevNode || (prevNode.status !== 'ok' && prevNode.status !== 'react-capped')
-    })?.id
+  const checkpointNodeId = nodeById(flow, prev.resumeFromNodeId ?? "")?.kind === "pause"
+    ? prev.resumeFromNodeId : undefined
   const nodes = (flow.nodes ?? []).map((node) => {
     const prevNode = prevByNode.get(node.id)
     if (prevNode && (prevNode.status === 'ok' || prevNode.status === 'react-capped')) {
-      return {
-        nodeId: node.id,
-        status: prevNode.status as NodeRunStatus,
-        attempts: prevNode.attempts,
-        startedAt: prevNode.startedAt,
-        endedAt: prevNode.endedAt,
-        output: prevNode.output,
-        outputSummary: prevNode.outputSummary,
-        resumed: true,
-      }
+      return { ...structuredClone(prevNode), resumed: true }
     }
     return {
       nodeId: node.id,
@@ -119,6 +106,7 @@ export function buildResumedSnapshot(input: {
       outputSummary: '',
     }
   })
+  const resumeNodeIds = schedulableResumeNodeIds(flow, { ...prev, nodes })
   return {
     id: runId,
     flowId: flow.id,
@@ -130,10 +118,49 @@ export function buildResumedSnapshot(input: {
     endedAt: null,
     summary: '',
     resumedFromRunId: prev.id,
-    resumeFromNodeId,
+    resumeFromNodeId: checkpointNodeId ?? resumeNodeIds[0],
+    checkpointNodeId,
+    resumeNodeIds,
     nodes,
+    ...(prev.milestoneUsed === undefined ? {} : { milestoneUsed: prev.milestoneUsed }),
     // 元参数冻结副本继承（D-13）：续跑沿用旧 run 冻结的预算，不重读模板/实例 meta
     // ——「冻结即冻结」，保证审计与后续评估能还原本次运行当时的约束。
     ...(prev.meta ? { meta: structuredClone(prev.meta) } : {}),
   }
+}
+
+
+/** 根据流程依赖找恢复调度前沿；结构节点不作为业务 Agent，暂停门仍需显式调度。 */
+export function schedulableResumeNodeIds(flow: WorkflowDocument, snapshot: RunSnapshot): string[] {
+  const dag = buildFlowDag(flow.nodes, flow.lines)
+  const records = new Map(snapshot.nodes.map((node) => [node.nodeId, node]))
+  const done = (id: string): boolean => {
+    const status = records.get(mainNodeIdOf(flow, id) ?? id)?.status
+    return status === "ok" || status === "react-capped"
+  }
+  const reachable = new Set<string>()
+  const queue = flow.nodes.filter((node) => node.kind === "start").map((node) => node.id)
+  for (let index = 0; index < queue.length; index++) {
+    const id = queue[index]
+    if (reachable.has(id)) continue
+    reachable.add(id)
+    queue.push(...(dag.adjacency.get(id) ?? []))
+  }
+  const satisfied = (id: string, path = new Set<string>()): boolean => {
+    if (path.has(id)) return false
+    const node = nodeById(flow, id)
+    if (!node) return false
+    if (node.kind === "start") return true
+    if (node.kind === "group") return done(id) || (node.data.memberIds.length > 0 && node.data.memberIds.every(done))
+    if (node.kind === "agent" || node.kind === "parent" || node.kind === "pause" || node.kind === "proxy") return done(id)
+    const nextPath = new Set(path).add(id)
+    return (dag.incoming.get(id) ?? []).every((source) => satisfied(source, nextPath))
+  }
+  return [...reachable].sort().filter((id) => {
+    const raw = nodeById(flow, id)
+    const node = raw?.kind === "proxy" ? nodeById(flow, raw.proxySourceId) : raw
+    if (!node || !["agent", "group", "pause"].includes(node.kind) || done(id)) return false
+    if (node.kind === "group" && node.data.memberIds.every(done)) return false
+    return (dag.incoming.get(id) ?? []).every((source) => satisfied(source))
+  })
 }

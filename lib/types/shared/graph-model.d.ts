@@ -34,6 +34,13 @@ export interface WorkflowValidationWarning {
     responsibilityIds: string[];
     suggestion?: string;
 }
+/** 可选的机器执行契约；inputSchema/outputSchema 仍为柔性文本说明。 */
+export interface NodeExecutionContract {
+    inputSource?: 'ctx' | 'workspace' | 'runtime';
+    requiredFiles?: string[];
+    requiredTools?: string[];
+    outputFiles?: string[];
+}
 /**
  * 角色节点：父代理（kind='parent'）与子代理（kind='agent'）共用的数据形状。
  * Kind 收窄为 'parent' | 'agent'，二者合一为 RoleNode 判别。
@@ -46,6 +53,7 @@ export interface RoleNode extends BaseNode {
         label: string;
         /** 规划来源与职责边界；旧工作流可省略。 */
         responsibility?: NodeResponsibility;
+        execution?: NodeExecutionContract;
         /** 系统提示词：场景独立生效，不继承父/子任何一方。 */
         systemPrompt: string;
         /** 服务商（模型提供方，经宿主适配器解析）。 */

@@ -25,6 +25,9 @@ export interface NodeTaskBlockParams {
          * 官方读取工具自行读取（不直通模型上下文）。可为空。
          */
         filePaths: string[];
+        workingDirectory?: string;
+        inputSource?: 'ctx' | 'workspace' | 'runtime';
+        outputFiles?: string[];
         /**
          * 数据库工具说明：存在 db-in 连线时说明 wf_db_query 三模式（search/query/schema，
          * 只读）用法；无 db-in 连线时为空字符串。

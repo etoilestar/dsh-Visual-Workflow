@@ -18,5 +18,15 @@ export class WfError extends Error {
 /** 错误消息提取（Error 或任意值）。 */
 export function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message
-  return String(error ?? '')
+  if (error && typeof error === "object") {
+    const record = error as { message?: unknown; error?: unknown; code?: unknown }
+    if (typeof record.message === "string") return record.message
+    if (typeof record.error === "string") return record.error
+    if (record.error && record.error !== error && typeof record.error === "object") {
+      const nested = record.error as { message?: unknown }
+      if (typeof nested.message === "string") return nested.message
+    }
+    return typeof record.code === "string" ? `错误代码：${record.code}` : "未知结构化异常（缺少 message/code）"
+  }
+  return String(error ?? "")
 }

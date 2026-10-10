@@ -3,6 +3,8 @@
 // 节点执行层单测（wf_run_node/wf_finish）：异步启动、护栏、任务块注入、暂停门、wait 阻塞、收尾幂等。
 // 装配与测试替身见 fixtures/harness.ts（共享，不在本文件内重复）。
 
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GLOBAL_RUN_CALL_LIMIT, OUTPUT_SUMMARY_LIMIT } from '../../../src/host/orchestrator/index.js'
 import { HEAD_MARKER, MID_MARKER, TAIL_MARKER } from '../../../src/host/prompts/index.js'
@@ -47,6 +49,8 @@ describe('wfRunNode 异步路径与护栏', () => {
     const h = await makeHarness()
     const flow = makeFlow()
     flow.nodes.splice(1, 0, fileNode('n-file-text', '文档A', { fileKind: 'text', content: '长'.repeat(300) }))
+    await mkdir(join(h.dir, 'data/files'), { recursive: true })
+    await writeFile(join(h.dir, 'data/files/b.pdf'), 'fixture contents')
     flow.nodes.splice(1, 0, fileNode('n-file-managed', '受管B', { fileKind: 'file', managedPath: 'data/files/b.pdf' }))
     flow.lines.push(
       { id: 'l-ctx-1', source: 'n-file-text', target: 'n-a1', sourceHandle: 'ctx-out', targetHandle: 'ctx-in' },
@@ -63,6 +67,9 @@ describe('wfRunNode 异步路径与护栏', () => {
   it('文档 ctx-in 多选 files：全部受管路径注入任务块（不因 managedPath 为空而丢失，§4.2.4.1）', async () => {
     const h = await makeHarness()
     const flow = makeFlow()
+    await mkdir(join(h.dir, 'data/files'), { recursive: true })
+    await writeFile(join(h.dir, 'data/files/a.pdf'), 'first fixture')
+    await writeFile(join(h.dir, 'data/files/b.pdf'), 'second fixture')
     flow.nodes.splice(1, 0, fileNode('n-file-multi', '多选文档', {
       fileKind: 'file',
       files: [
@@ -492,10 +499,75 @@ describe('wfRunNode 协作组路径（官方 Agent Team）', () => {
 })
 
 describe('wfFinish 收尾', () => {
+  it("test_legacy_required_failure_cannot_be_hidden_by_completed", async () => {
+    const h = await makeHarness()
+    await start(h, makeFlow())
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "error" })
+    expect((await h.runtime.wfFinish(caller, { status: "completed" })).status).toBe("failed")
+    expect((await h.store.getRun("run-1"))?.summary).toContain("n-a1")
+  })
+
+  it("test_unsettled_selected_node_rejects_success_but_allows_explicit_failure", async () => {
+    const h = await makeHarness()
+    await start(h, makeFlow())
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await expect(h.runtime.wfFinish(caller, { status: "completed" })).rejects.toMatchObject({ code: "WF_RUN_INCOMPLETE" })
+    expect(h.runtime.runSnapshot("run-1")?.status).toBe("running")
+    expect((await h.runtime.wfFinish(caller, { status: "failed" })).status).toBe("failed")
+  })
+
+  it("test_optional_conditional_branch_and_legal_early_finish_are_preserved", async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.lines.find((line) => line.id === "l2")!.condition = { type: "content", label: "需要进一步处理时" }
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "纯文本任务已完成，不需要额外分支" }] })
+    expect((await h.runtime.wfFinish(caller, { status: "completed" })).status).toBe("completed")
+    expect((await h.store.getRun("run-1"))?.nodes.find((node) => node.nodeId === "n-a2")?.status).toBe("skipped")
+  })
+
+  it("test_selected_conditional_path_failure_is_not_hidden_without_execution_contract", async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.lines.find((line) => line.id === "l2")!.condition = { type: "pass" }
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a2" })
+    await h.runtime.handleSubagentEnd({ id: "child-2", stopReason: "error" })
+    await h.runtime.wfFinish(caller, { status: "completed" })
+    expect((await h.store.getRun("run-1"))!.status).toBe("failed")
+  })
+
+  it("test_explicit_failure_branch_can_recover_a_failed_node", async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.lines = [flow.lines[0], { id: "recover", source: "n-a1", target: "n-a2", sourceHandle: "flow-out", targetHandle: "flow-in", condition: { type: "fail" } }, flow.lines[3]]
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "error" })
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a2" })
+    await h.runtime.handleSubagentEnd({ id: "child-2", stopReason: "completed" })
+    expect((await h.runtime.wfFinish(caller, { status: "completed" })).status).toBe("completed")
+  })
+
+  it("test_completed_downstream_requires_settled_unconditional_predecessor", async () => {
+    const h = await makeHarness()
+    const flow = makeFlow()
+    flow.lines = [flow.lines[0], { id: "dependency", source: "n-a1", target: "n-a2", sourceHandle: "flow-out", targetHandle: "flow-in" }, flow.lines[3]]
+    await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a2" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
+    await expect(h.runtime.wfFinish(caller, { status: "completed" })).rejects.toMatchObject({ code: "WF_RUN_INCOMPLETE" })
+  })
+
   it('completed：终态、summary、pending→skipped、持久化、锁释放', async () => {
     const h = await makeHarness()
     const { entry } = await start(h, makeFlow())
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
     const result = await h.runtime.wfFinish(caller, { status: 'completed', summary: '全部完成' })
 
     expect(result).toEqual({ ok: true, runId: 'run-1', status: 'completed' })

@@ -5,11 +5,12 @@
 // 方法体逐字移动。
 
 import type { WorkflowDocument } from '../shared/graph-model.js'
-import { memberGroupId } from '../graph/index.js'
-import { lastAssistantText, setNodeStatus } from './snapshot.js'
+import { memberGroupId, nodeById } from '../graph/index.js'
+import { failureOf, lastAssistantText, setNodeStatus } from './snapshot.js'
 import { SUBAGENT_END_RETRY_DELAY_MS, SUBAGENT_END_RETRY_MAX } from './seams.js'
 import type { RunEntry, SubagentEndInfo } from './run-entry.js'
 import { RuntimeComm } from './runtime-comm.js'
+import { verifyNodeArtifacts } from './execution-inputs.js'
 
 export class RuntimeObserve extends RuntimeComm {
   // ---- subagent/end 观察 ------------------------------------------------------
@@ -57,7 +58,18 @@ export class RuntimeObserve extends RuntimeComm {
       const stopReason = String(info?.stopReason ?? '')
       // max-tokens = 模型输出被硬截断（内容不完整），不能视为成功（Bug 19）；
       // 仅 completed 才算节点成功；ReAct 软截停由 consumeReactCapped 另判 react-capped。
-      const completed = stopReason === 'completed'
+      let completed = stopReason === 'completed'
+      let artifactFailure
+      if (completed) {
+        const node = nodeById(await this.currentResolvedFlow(entry), meta.nodeId)
+        if (node?.kind === 'agent') {
+          try { await verifyNodeArtifacts(node, s, this.now()) } catch (error) {
+            completed = false
+            artifactFailure = failureOf(error, 'run_finish', 'WF_OUTPUT_FILE_MISSING', this.now())
+          }
+        }
+      }
+      if (s.status !== 'running' && s.status !== 'paused') return
       // 完整产出先取全量（limit=0 不截断），再由 setNodeStatus 按两套口径各自截断：
       //   - nodes[].output        ← config.outputFullLimit（默认 100KB；断点回填与下游 ctx 注入的读取源）
       //   - nodes[].outputSummary ← OUTPUT_SUMMARY_LIMIT（6000 字；仅供界面展示）
@@ -79,11 +91,15 @@ export class RuntimeObserve extends RuntimeComm {
         now: this.now(),
         stopReason,
         recordTurn: true,
+        childId,
+        ...(completed ? {} : { failure: artifactFailure ?? s.nodes.find((node) => node.nodeId === meta.nodeId)?.failure ?? failureOf({ message: `子代理执行结束：${stopReason || "unknown"}` }, "child_execute", "WF_CHILD_EXECUTION_FAILED", this.now()) }),
       })
       // 协作组聚合：成员产出一轮后若组内全部成员均已产出且该组无挂起 ask → 组卡片记为 ok
       // （「组内全部 ok -> 组卡片记为 ok」；只做回显，不干预父代理调度）
       if (completed) await this.markGroupOkIfComplete(entry, meta.nodeId)
       await this.persistWarn(entry)
+      const settledNode = s.nodes.find((node) => node.nodeId === meta.nodeId)
+      this.log().info(JSON.stringify({ runId: s.id, nodeId: meta.nodeId, childId, attempt: settledNode?.attempts, phase: "settled", status: finalStatus, stopReason, errorCode: settledNode?.failure?.code }))
       // 唤醒阻塞等待（wait:true；与 subagent/end 共用同一完成通道）。armed 视同完成。
       const waitKey = `${s.id}:${meta.nodeId}`
       const waiter = entry.waiters.get(waitKey)

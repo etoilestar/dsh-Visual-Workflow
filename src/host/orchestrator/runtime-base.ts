@@ -12,6 +12,7 @@
 // RuntimeObserve ← RuntimeLifecycle ← OrchestratorRuntime（runtime.ts 收口）。
 
 import { randomUUID } from 'node:crypto'
+import { DEFAULT_RUN_EXECUTION_TIMEOUT_MS } from "../config.js"
 import { activeMilestoneGateOf, isGroupMember, normalizeOrgMeta } from '../graph/index.js'
 import type { RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import type { RunSnapshot, RunStatus } from '../shared/types.js'
@@ -48,6 +49,7 @@ export abstract class RuntimeBase {
   protected readonly childIndex = new Map<string, ChildMeta>()
   /** nodeId → childId 反向索引（wf_ask_agent 节点 id 寻址 O(1)，P2-4）。 */
   protected readonly childByNode = new Map<string, string>()
+  private readonly pendingChildRoutes = new Map<string, { provider: string; model: string }>()
   /**
    * 自动续跑去重表（sessionId → 进行中的运行上下文接续 Promise）。
    * 为什么需要：父代理可以在同一步里并发发起多个 wf_* 工具调用（模型支持并行工具
@@ -71,6 +73,40 @@ export abstract class RuntimeBase {
 
   protected log(): OrchestratorLogger {
     return this.deps.logger ?? consoleLogger
+  }
+
+  async recordModelRoute(agentId: string, route: unknown, options: { pendingChild?: boolean } = {}): Promise<void> {
+    const value = route as { provider?: unknown; model?: unknown } | null
+    if (typeof value?.provider !== "string" || typeof value.model !== "string") return
+    const parent = this.activeRunForSession(agentId)
+    const child = this.runForChild(agentId)
+    const entry = parent ?? child
+    if (!entry) {
+      if (options.pendingChild) this.pendingChildRoutes.set(agentId, { provider: value.provider, model: value.model })
+      return
+    }
+    this.pendingChildRoutes.delete(agentId)
+    const meta = this.childMetaFor(agentId)
+    if (meta?.retired) return
+    if (parent) entry.snapshot.parentRoute = { provider: value.provider, model: value.model }
+    else if (meta) {
+      const node = entry.snapshot.nodes.find((item) => item.nodeId === meta.nodeId)
+      if (node) setNodeStatus(entry.snapshot, node.nodeId, node.status, { provider: value.provider, model: value.model, now: this.now() })
+    }
+    this.log().info(JSON.stringify({ runId: entry.snapshot.id, nodeId: meta?.nodeId, childId: child ? agentId : undefined, phase: "model_request", role: parent ? "parent" : "child", provider: value.provider, model: value.model }))
+    await this.persistWarn(entry)
+  }
+
+  protected applyPendingChildRoute(entry: RunEntry, nodeId: string, childId: string): void {
+    const route = this.pendingChildRoutes.get(childId)
+    if (!route) return
+    this.pendingChildRoutes.delete(childId)
+    setNodeStatus(entry.snapshot, nodeId, 'running', { ...route, now: this.now() })
+    this.log().info(JSON.stringify({ runId: entry.snapshot.id, nodeId, childId, phase: 'model_request', role: 'child', ...route }))
+  }
+
+  discardPendingChildRoute(childId: string): void {
+    this.pendingChildRoutes.delete(childId)
   }
 
   /** 当前时间戳（时钟注入）。 */
@@ -218,6 +254,14 @@ export abstract class RuntimeBase {
   /** 空闲看护门限（watchdog.ts 引用）。 */
   get idleTimeoutMs(): number {
     return this.deps.config.runIdleTimeoutMs
+  }
+
+  get executionTimeoutMs(): number {
+    return this.deps.config.runExecutionTimeoutMs ?? DEFAULT_RUN_EXECUTION_TIMEOUT_MS
+  }
+
+  parentRunning(entry: RunEntry): boolean {
+    return this.deps.agents.getRootAgent(entry.snapshot.sessionId)?.status === "running"
   }
 
   /** 子代理是否仍在运行（watchdog.ts 引用；经 AgentHost）。 */
@@ -640,6 +684,9 @@ export abstract class RuntimeBase {
       startedAt: snapshot.startedAt ?? null,
       endedAt: snapshot.endedAt ?? null,
       nodeCount: snapshot.nodes.length,
+      summary: snapshot.summary,
+      nodes: snapshot.nodes,
+      errorCodes: [...(snapshot.parentErrors ?? []).map((error) => error.code), ...(snapshot.termination?.failure ? [snapshot.termination.failure.code] : [])],
       systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
     })
     if (!facts) return

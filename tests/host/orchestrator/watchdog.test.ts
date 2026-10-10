@@ -11,6 +11,48 @@ import { makeFlow, makeHarness, caller, start, cleanupTempDirs } from './fixture
 afterEach(cleanupTempDirs)
 
 describe('watchdog 看护与陈旧记录对账', () => {
+  it("test_parent_long_request_and_post_failure_planning_are_not_idle", async () => {
+    const h = await makeHarness()
+    const { entry } = await start(h, makeFlow())
+    await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "error" })
+    h.agents.roots.get("session-1")!.status = "running"
+    h.clock.now += 10_000
+    await sweepWatchdogOnce(h.runtime)
+    expect(entry.snapshot.status).toBe("running")
+    h.agents.roots.get("session-1")!.status = "idle"
+    await sweepWatchdogOnce(h.runtime)
+    expect(entry.snapshot.status).toBe("running")
+    h.clock.now += 500
+    await sweepWatchdogOnce(h.runtime)
+    expect(entry.snapshot.termination?.source).toBe("idle_timeout")
+    expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")?.failure?.code).toBe("WF_CHILD_EXECUTION_FAILED")
+  })
+
+  it("test_execution_timeout_is_distinct_from_idle_parent_error_and_user_stop", async () => {
+    const h = await makeHarness({ runExecutionTimeoutMs: 1000 })
+    const { entry } = await start(h, makeFlow())
+    h.agents.roots.get("session-1")!.status = "running"
+    h.clock.now += 1000
+    await sweepWatchdogOnce(h.runtime)
+    expect(entry.snapshot).toMatchObject({ status: "stopped", termination: { source: "execution_timeout", failure: { code: "WF_EXECUTION_TIMEOUT" } } })
+    const second = await makeHarness()
+    const { entry: stopped } = await start(second, makeFlow())
+    await second.runtime.stopRun(stopped.snapshot.id)
+    expect(stopped.snapshot.termination?.source).toBe("user_stop")
+  })
+
+  it("test_context_overflow_parent_error_takes_precedence_over_idle", async () => {
+    const h = await makeHarness()
+    const { entry } = await start(h, makeFlow())
+    h.agents.turnEnd = { kind: "error", error: { code: "CONTEXT_WINDOW_EXCEEDED", message: "400 status code (no body)" } }
+    h.clock.now += 10_000
+    await sweepWatchdogOnce(h.runtime)
+    expect(entry.snapshot).toMatchObject({ status: "failed", termination: { source: "parent_error", failure: { code: "CONTEXT_WINDOW_EXCEEDED", message: "400 status code (no body)" } } })
+    expect(entry.snapshot.summary).toContain("DSH token meter")
+    expect(entry.snapshot.nodes.every((node) => node.attempts === 0)).toBe(true)
+  })
+
   it('空闲超时：无 inflight 且静默超过 idleTimeoutMs → stopped', async () => {
     const h = await makeHarness()
     const { entry } = await start(h, makeFlow())

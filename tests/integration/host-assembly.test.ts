@@ -158,7 +158,10 @@ describe('VisualWorkflowHost 装配', () => {
       },
       get(name: string): unknown {
         return name === 'tools'
-          ? { restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} } }
+          ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { name: string }) => string | undefined) => {
+              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ name }) !== undefined) })
+              return () => {}
+            } }
           : undefined
       },
     }
@@ -168,7 +171,7 @@ describe('VisualWorkflowHost 装配', () => {
       .childPrompt.withPending(
         { systemPrompt: '子代理角色', injectSystemPrompt: true, injectToolSections: true },
         async () => {
-          ;(host as unknown as { onAgentCreated(p: unknown): void }).onAgentCreated({
+          await (host as unknown as { onAgentCreated(p: unknown): Promise<void> }).onAgentCreated({
             agent: { id: 'child-x', ctx: childCtx },
           })
         },
@@ -204,7 +207,10 @@ describe('VisualWorkflowHost 装配', () => {
         systemPrompt: { section(input: { name: string; order: number }): () => void { sections.push(input); return () => {} } },
         get(name: string): unknown {
           return name === 'tools'
-            ? { restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} } }
+            ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { name: string }) => string | undefined) => {
+              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ name }) !== undefined) })
+              return () => {}
+            } }
             : undefined
         },
       }
@@ -220,7 +226,7 @@ describe('VisualWorkflowHost 装配', () => {
     const first = makeCtx()
     await hostAs.childPrompt.withPending(
       { systemPrompt: '子代理角色', injectSystemPrompt: true, injectToolSections: true },
-      async () => { hostAs.onAgentCreated({ agent: { id: 'child-x', ctx: first.childCtx } }) },
+      async () => { await hostAs.onAgentCreated({ agent: { id: 'child-x', ctx: first.childCtx } }) },
     )
     expect(first.sections.map((s) => s.name)).toContain(VISUAL_WORKFLOW_PROMPT_SECTION)
 
@@ -228,7 +234,7 @@ describe('VisualWorkflowHost 装配', () => {
     // 关键：必须用首建持久化状态重装四类贡献，否则回退官方提示词（二次重置 BUG 回归）
     const second = makeCtx()
     expect(hostAs.childPrompt.hasPending()).toBe(false)
-    hostAs.onAgentCreated({ agent: { id: 'child-x', ctx: second.childCtx } })
+    await hostAs.onAgentCreated({ agent: { id: 'child-x', ctx: second.childCtx } })
 
     expect(second.sections.map((s) => s.name)).toContain(VISUAL_WORKFLOW_PROMPT_SECTION)
     expect(second.handlers.get('system-prompt/assemble')?.length ?? 0).toBeGreaterThan(0)
@@ -257,7 +263,10 @@ describe('VisualWorkflowHost 装配', () => {
         systemPrompt: { section(input: { name: string; order: number }): () => void { sections.push(input); return () => {} } },
         get(name: string): unknown {
           return name === 'tools'
-            ? { restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} } }
+            ? { get: () => ({}), restrict: (filter: { deny?: string[] }) => { denies.push(filter); return () => {} }, guard: (check: (exec: { name: string }) => string | undefined) => {
+              denies.push({ deny: ["wf_run_node", "wf_finish"].filter((name) => check({ name }) !== undefined) })
+              return () => {}
+            } }
             : undefined
         },
       }
@@ -274,7 +283,7 @@ describe('VisualWorkflowHost 装配', () => {
     const first = makeCtx()
     await hostAs.childPrompt.withPending(
       { systemPrompt: '子代理角色', injectSystemPrompt: true, injectToolSections: true },
-      async () => { hostAs.onAgentCreated({ agent: { id: 'child-x', ctx: first.childCtx } }) },
+      async () => { await hostAs.onAgentCreated({ agent: { id: 'child-x', ctx: first.childCtx } }) },
     )
     expect(first.sections.map((s) => s.name)).toContain(VISUAL_WORKFLOW_PROMPT_SECTION)
 
@@ -285,7 +294,7 @@ describe('VisualWorkflowHost 装配', () => {
     // ③ 第二轮父代理派发 → coldResume 冷恢复（重新发布）→ 再次 agent/created
     //    （不在 withPending 内）。必须用首建持久化状态重装四类贡献，否则回退官方提示词。
     const second = makeCtx()
-    hostAs.onAgentCreated({ agent: { id: 'child-x', ctx: second.childCtx } })
+    await hostAs.onAgentCreated({ agent: { id: 'child-x', ctx: second.childCtx } })
 
     // 角色提示词段 / 组装瀑布 / 工具可见性 deny 均已重装（不因 dispose 丢失）
     expect(second.sections.map((s) => s.name)).toContain(VISUAL_WORKFLOW_PROMPT_SECTION)
@@ -295,4 +304,68 @@ describe('VisualWorkflowHost 装配', () => {
 
     await root.fiber.dispose()
   })
+  it("test_one_policy_per_scope_republication_disposal_and_append_failure_cleanup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vw-host-"))
+    cleanups.push(() => rm(dir, { recursive: true, force: true }))
+    const root = new Context()
+    await root.plugin(VisualWorkflowHost, makeConfig(dir))
+    const host = root.get(VisualWorkflowHostServiceName) as unknown as {
+      childPrompt: { withPending(s: unknown, o: () => Promise<void>): Promise<void> }
+      childToolFilter: { withPending(s: string[], o: () => Promise<void>): Promise<void> }
+      onAgentCreated(p: unknown): Promise<void>
+      onAgentDisposed(p: unknown): void
+    }
+    const guards: unknown[] = []
+    const masks: unknown[] = []
+    const childCtx = { get: () => ({ get: () => undefined,
+      guard: (guard: unknown) => { guards.push(guard); return () => { guards.splice(guards.indexOf(guard), 1) } },
+      restrict: (mask: unknown) => { masks.push(mask); return () => { masks.splice(masks.indexOf(mask), 1) } },
+    }) }
+    const agent = { id: "once", ctx: childCtx }
+    const state = { systemPrompt: "角色", injectSystemPrompt: true, injectToolSections: true }
+    const create = (value: unknown) => host.childPrompt.withPending(state, () => host.childToolFilter.withPending([], () => host.onAgentCreated({ agent: value })))
+    await create(agent)
+    const permissionGuards = () => guards.filter((guard) => (guard as (call: { name: string }) => string | undefined)({ name: "wf_finish" })?.startsWith("WF_NOT_ROOT"))
+    expect(permissionGuards()).toHaveLength(1)
+    expect(masks).toEqual([{ allow: [] }])
+    await host.onAgentCreated({ agent })
+    expect(permissionGuards()).toHaveLength(1)
+    expect(masks).toHaveLength(1)
+    host.onAgentDisposed({ agent })
+    expect(guards).toHaveLength(0)
+    expect(masks).toHaveLength(0)
+    await expect(create({ ...agent, session: { append: () => { throw new Error("persistence failed") } } })).rejects.toThrow("persistence failed")
+    expect(guards).toHaveLength(0)
+    expect(masks).toHaveLength(0)
+    await root.fiber.dispose()
+  })
+
+  it('跨 Host 重启从官方会话事件恢复空白名单；权限接口缺失阻止创建', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vw-host-'))
+    cleanups.push(() => rm(dir, { recursive: true, force: true }))
+    const events: unknown[] = []
+    const session = { events, append: (type: string, data: unknown) => { events.push({ type, data }) } }
+    const first = new Context()
+    await first.plugin(VisualWorkflowHost, makeConfig(dir))
+    const host = first.get(VisualWorkflowHostServiceName) as unknown as {
+      childPrompt: { withPending(s: unknown, o: () => Promise<void>): Promise<void> }
+      childToolFilter: { withPending(s: string[], o: () => Promise<void>): Promise<void> }
+      onAgentCreated(p: unknown): Promise<void>
+    }
+    const masks: unknown[] = []
+    const childCtx = { get: () => ({ get: () => ({}), guard: () => () => {}, restrict: (f: unknown) => { masks.push(f); return () => {} } }) }
+    await host.childPrompt.withPending({ systemPrompt: '角色', injectSystemPrompt: true, injectToolSections: true }, () =>
+      host.childToolFilter.withPending([], () => host.onAgentCreated({ agent: { id: 'durable-child', ctx: childCtx, session } })))
+    expect(events).toContainEqual(expect.objectContaining({ data: expect.objectContaining({ allow: [] }) }))
+    await first.fiber.dispose()
+    masks.length = 0
+    const second = new Context()
+    await second.plugin(VisualWorkflowHost, makeConfig(dir))
+    const restored = second.get(VisualWorkflowHostServiceName) as unknown as { onAgentCreated(p: unknown): Promise<void> }
+    await restored.onAgentCreated({ agent: { id: 'durable-child', ctx: childCtx, session } })
+    expect(masks).toContainEqual({ allow: [] })
+    await expect(restored.onAgentCreated({ agent: { id: 'durable-child', ctx: { get: () => undefined }, session } })).rejects.toMatchObject({ code: 'WF_CHILD_TOOL_POLICY_FAILED' })
+    await second.fiber.dispose()
+  })
+
 })

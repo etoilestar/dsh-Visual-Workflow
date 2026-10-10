@@ -22,6 +22,7 @@ export declare abstract class RuntimeBase {
     protected readonly childIndex: Map<string, ChildMeta>;
     /** nodeId → childId 反向索引（wf_ask_agent 节点 id 寻址 O(1)，P2-4）。 */
     protected readonly childByNode: Map<string, string>;
+    private readonly pendingChildRoutes;
     /**
      * 自动续跑去重表（sessionId → 进行中的运行上下文接续 Promise）。
      * 为什么需要：父代理可以在同一步里并发发起多个 wf_* 工具调用（模型支持并行工具
@@ -41,6 +42,11 @@ export declare abstract class RuntimeBase {
     protected disposed: boolean;
     constructor(deps: OrchestratorDeps);
     protected log(): OrchestratorLogger;
+    recordModelRoute(agentId: string, route: unknown, options?: {
+        pendingChild?: boolean;
+    }): Promise<void>;
+    protected applyPendingChildRoute(entry: RunEntry, nodeId: string, childId: string): void;
+    discardPendingChildRoute(childId: string): void;
     /** 当前时间戳（时钟注入）。 */
     now(): number;
     /** 当前 ISO 时间字符串。 */
@@ -90,6 +96,8 @@ export declare abstract class RuntimeBase {
     milestoneUsedForSession(sessionId: string): number;
     /** 空闲看护门限（watchdog.ts 引用）。 */
     get idleTimeoutMs(): number;
+    get executionTimeoutMs(): number;
+    parentRunning(entry: RunEntry): boolean;
     /** 子代理是否仍在运行（watchdog.ts 引用；经 AgentHost）。 */
     childRunning(childId: string): boolean;
     /** 父代理回合终态检测（watchdog.ts 引用）。 */

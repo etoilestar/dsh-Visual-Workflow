@@ -8,6 +8,7 @@ import { isGroupMember } from '../graph/index.js'
 import type { RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import type { RunSnapshot } from '../shared/types.js'
 import { buildNodeContextFacts, collabBlockOf } from './graph-facts.js'
+import { absoluteInputPath, executionOf } from './execution-inputs.js'
 
 /**
  * 解析节点任务块的输入结构说明（data.inputSchema）。
@@ -67,12 +68,20 @@ export function buildNodeBlocks(input: {
     documentTextLimit: input.documentTextLimit,
   })
   const outputContract = outputContractOf(flow, node)
+  const execution = executionOf(node)
+  for (const path of execution.requiredFiles ?? []) {
+    const absolute = absoluteInputPath(path, input.snapshot.workingDirectory)
+    if (!filePaths.includes(absolute)) filePaths.push(absolute)
+  }
 
   const text = buildNodeTaskBlock({
     facts: {
       nodeLabel: data.label || node.id,
       upstreamContext,
       filePaths,
+      workingDirectory: input.snapshot.workingDirectory,
+      inputSource: execution.inputSource,
+      outputFiles: (execution.outputFiles ?? []).map((path) => absoluteInputPath(path, input.snapshot.workingDirectory)),
       dbToolHint,
       isGroupMember: isGroupMember(flow, node.id),
       collabChannel: input.collabChannel ?? 'legacy',

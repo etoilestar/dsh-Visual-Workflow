@@ -83,6 +83,31 @@ export class CordisAgentHost implements AgentHost {
     return raw as RootAgentLike
   }
 
+  /** 只读取该会话用户消息内的已接纳文件引用，由官方附件服务验证并解析宿主路径。 */
+  authorizedInputFiles(sessionId: string): string[] {
+    const attachments = this.ctx.get("attachments") as { fileHostPath?: (ref: { attachmentId: string; name: string; bytes: number }) => string | undefined } | undefined
+    const session = this.getRootAgent(sessionId)?.session as { seq?: number; eventAt?: (seq: number) => unknown; events?: unknown[] } | undefined
+    if (typeof attachments?.fileHostPath !== "function" || !session) return []
+    const paths = new Set<string>()
+    const length = session.seq ?? session.events?.length ?? 0
+    for (let index = 0; index < length; index++) {
+      const event = (session.eventAt?.(index) ?? session.events?.[index]) as { type?: unknown; data?: { source?: { kind?: unknown }; content?: unknown } } | undefined
+      if (event?.type !== "user/message" || event.data?.source?.kind !== "user" || !Array.isArray(event.data.content)) continue
+      for (const block of event.data.content) {
+        const part = block as { type?: unknown; attachment?: { attachmentId?: unknown; name?: unknown; bytes?: unknown } } | null
+        const ref = part?.attachment
+        if (part?.type !== "file" || typeof ref?.attachmentId !== "string" || typeof ref.name !== "string" || typeof ref.bytes !== "number" || !Number.isSafeInteger(ref.bytes) || ref.bytes < 0) continue
+        try {
+          const path = attachments.fileHostPath({ attachmentId: ref.attachmentId, name: ref.name, bytes: ref.bytes })
+          if (path) paths.add(path)
+        } catch {
+          // 无效或已撤销的引用不授予外部路径权限；实际绑定预检会报告未授权。
+        }
+      }
+    }
+    return [...paths]
+  }
+
   /** 按会话 id 取子代理 agent（wf_ask_agent 投递缝用；未激活返回 null）。 */
   getChildAgent(childId: string): RootAgentLike | null {
     const service = this.agentsService()

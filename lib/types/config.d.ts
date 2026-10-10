@@ -2,6 +2,7 @@ import z from '@deepseek-ai/schemastery';
 /** 插件稳定标识名（亦是 cordis.patch.yml 中 insert 行的 name 解析目标）。 */
 export declare const name = "dsh-visual-workflow";
 export declare const inject: string[];
+export declare const DEFAULT_RUN_EXECUTION_TIMEOUT_MS = 7200000;
 /** Host 插件的全部可配置键（已含默认值，应用后为必填）。 */
 export interface Config {
     /** 数据根目录（工作流/服务/模板/运行历史/断点的落盘目录）。 */
@@ -16,6 +17,8 @@ export interface Config {
     wfAskAgentTimeoutMs: number;
     /** 运行空闲超时毫秒数（无 in-flight 看护门限）。 */
     runIdleTimeoutMs: number;
+    /** 运行执行时限，独立于空闲时限；0 表示关闭执行时限。 */
+    runExecutionTimeoutMs?: number;
     /** 运行状态回显轮询间隔毫秒数。 */
     runPollMs: number;
     /** ReAct 迭代次数默认上限（软截停强制收尾）。 */

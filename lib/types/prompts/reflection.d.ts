@@ -14,6 +14,11 @@ export interface RunReflectionFacts {
     durationMs: number | null;
     /** 快照 nodes.length（运行快照内的全部节点数）。 */
     nodeCount: number;
+    runSummary?: string;
+    completedNodes?: string[];
+    failedNodes?: string[];
+    skippedNodes?: string[];
+    errorCodes?: string[];
     /** 系统语言名（沿用仓库既有 systemLanguage 口径，可为空串）。 */
     systemLanguage?: string;
 }

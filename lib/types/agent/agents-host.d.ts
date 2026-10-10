@@ -9,6 +9,8 @@ export declare class CordisAgentHost implements AgentHost {
     private agentsService;
     available(): boolean;
     getRootAgent(sessionId: string): RootAgentLike | null;
+    /** 只读取该会话用户消息内的已接纳文件引用，由官方附件服务验证并解析宿主路径。 */
+    authorizedInputFiles(sessionId: string): string[];
     /** 按会话 id 取子代理 agent（wf_ask_agent 投递缝用；未激活返回 null）。 */
     getChildAgent(childId: string): RootAgentLike | null;
     followupRoot(agent: RootAgentLike, message: RootInjectedMessage): void;

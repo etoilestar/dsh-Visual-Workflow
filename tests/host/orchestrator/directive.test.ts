@@ -149,6 +149,18 @@ describe('orchestrationNodeList / collabGroupList 只列参与流程的执行单
 })
 
 describe('buildParentRunPrompt 三情况整装（身份措辞互斥）', () => {
+  it("test_resume_keeps_scheduling_contract_without_repeating_goal_or_history", () => {
+    const f = flow([roleNode("a1", "agent", "文本任务")], [flowLine("in", "start", "a1"), flowLine("out", "a1", "end")])
+    f.description = "很长的工作流目标，不需要每次恢复重新注入"
+    const params = { flow: f, defPath: "/runs/current.json", mode: "mode1" as const, executor: null, systemLanguage: "中文" }
+    const fresh = buildParentRunPrompt(params)
+    const resumed = buildParentRunPrompt({ ...params, resume: { resumedFromRunId: "old", resumeNodeIds: ["a1"] } })
+    expect(resumed).toContain("/runs/current.json")
+    expect(resumed).toContain("wf_run_node")
+    expect(resumed).toContain("a1")
+    expect(resumed).not.toContain(f.description)
+    expect(resumed.length).toBeLessThan(fresh.length)
+  })
   it('情况1（无父代理）→ 纯编排指令：含「仅编排」、不含执行者模式（经导出常量引用）', () => {
     const f = flow([roleNode('a1', 'agent', '子代理A')], [flowLine('s-a1', 'start', 'a1'), flowLine('a1-end', 'a1', 'end')])
     const directive = buildParentRunPrompt({ flow: f, defPath: 'orchestrations/run-1.json', mode: 'mode1', executor: null, systemLanguage: '中文' })

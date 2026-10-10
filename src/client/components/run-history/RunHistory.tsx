@@ -71,6 +71,17 @@ export function RunHistory({ history, selectedRunId, copy, onSelect, onClose, on
                         </span>
                       )
                     : null}
+                  {run.termination ? <span className="wf-history__meta">{`${copy.runTermination}: ${run.termination.source} · ${run.termination.failure?.code ?? run.termination.stopReason ?? ''} · ${run.termination.failure?.message ?? ''}`}</span> : null}
+                  {run.nodes?.filter((node) => node.failure || node.attemptHistory?.some((attempt) => attempt.failure)).map((node) => (
+                    <span key={node.nodeId} className="wf-history__meta">
+                      {`${copy.runDiagnostic}: ${node.nodeId} · ${node.failure?.phase ?? ''} · ${node.failure?.code ?? ''} · ${node.failure?.message ?? ''}`}
+                      {node.attemptHistory?.map((attempt) => (
+                        <span key={attempt.attempt} className="wf-history__meta">
+                          {`${copy.runAttempt} ${attempt.attempt}: ${statusLabel(attempt.status ?? '', copy)} · ${attempt.childId ?? ''} · ${attempt.provider ?? ''}/${attempt.model ?? ''} · ${attempt.stopReason ?? ''} · ${attempt.failure?.code ?? ''} · ${attempt.failure?.message ?? ''}`}
+                        </span>
+                      ))}
+                    </span>
+                  ))}
                   {resumable ? (
                     <span className="wf-history__resume">
                       <button
