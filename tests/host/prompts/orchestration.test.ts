@@ -111,3 +111,15 @@ describe('T-005 编排父代理提示词（情况2 编排+自执行）', () => {
     expect(Object.values(ORCH_HARD_CONSTRAINTS).some((v) => tail.includes(v))).toBe(true)
   })
 })
+
+describe("输入缺失与业务结算约束", () => {
+  it.each([buildOrchestratorPrompt, buildHybridPrompt])("test_prompt_input_settlement_and_termination_constraints_head_and_tail", (build) => {
+    const output = build({ facts: orchFacts, dynamic: {} })
+    const head = output.slice(0, output.indexOf(TAIL_MARKER))
+    const tail = output.slice(output.indexOf(TAIL_MARKER))
+    for (const constraint of [ORCH_HARD_CONSTRAINTS.inputBindings, ORCH_HARD_CONSTRAINTS.nodeSettledSignal, ORCH_HARD_CONSTRAINTS.safeTermination]) {
+      expect(head).toContain(constraint)
+      expect(tail).toContain(constraint)
+    }
+  })
+})

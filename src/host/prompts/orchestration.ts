@@ -90,13 +90,15 @@ export interface OrchestrationDirectiveParams {
  */
 export const ORCH_HARD_CONSTRAINTS = {
   /** 父代理「仅调度不执行」核心短语（情况1 首段 + 末段重申双位）。 */
-  dispatchOnly: '仅编排：你只负责调度子代理，不亲自执行节点任务',
+  dispatchOnly: "仅编排：你只负责调度子代理，不亲自执行节点任务；不得用 Bash、Glob 等工具替 load_data 查找或处理 CSV",
   /**
    * 节点完成判定（双重汇报防治，一句话）：子代理主动 report ≠ 完成；
    * 只有 DSH 自动送达的结算通知才是节点完成的权威信号。
    */
   nodeSettledSignal:
-    '节点判定：只有收到结算通知（Background subagent … finished …）才算该节点完成',
+    "节点判定：收到结算通知（Background subagent … finished …）后，仍须依据运行快照的结算状态与声明产物判断业务完成；请求上传 CSV 或回复文件路径不等于成功",
+  inputBindings: "输入缺失：报告具体节点与缺少的文件绑定，不启动该节点或下游；通过宿主允许的用户交互工具索取输入，wf_ask 仅供子代理通信；附件上传后需明确完成 Workflow 文件绑定并启动新运行，不能猜测或自行搜索 CSV",
+  safeTermination: "无法安全继续时调用 wf_finish，status 为 failed，释放运行锁；不得无限重试或自行声称节点成功；沙箱后端故障按真实原因报告，不绕过工具守卫或沙箱",
   /** 收尾协议：wf_finish 幂等收尾、释放锁。 */
   finishIdempotent: '收尾时调用 wf_finish （只调用一次，幂等，释放运行锁）',
   /** 失败语义：节点失败需显式处置，不静默跳过。 */
@@ -182,9 +184,11 @@ function buildHeadSection(identityLine: string, roleConstraint: string, langRule
     `1. ${roleConstraint}。`,
     `2. ${c.nodeSettledSignal}；收到前不得推进下游或收尾。`,
     `3. ${c.finishIdempotent}。`,
-    `4. ${c.failureSemantics}；可重试一次，若仍失败则询问用户；若编排失控或确认无法继续，即终止运行。`,
+    `4. ${c.failureSemantics}；仅在投递与执行结果明确、输入已满足且预算允许时重试。`,
     `5. ${c.conditionSemantics}。`,
     ...(langRule ? [`6. ${langRule}`] : []),
+    `- ${c.inputBindings}。`,
+    `- ${c.safeTermination}。`,
   ].join('\n')
 }
 
@@ -199,6 +203,9 @@ function buildTailSection(langRule: string, dynamic: OrchestrationDirectiveParam
     TAIL_RESTATE_MARKER,
     `- ${ORCH_HARD_CONSTRAINTS.finishIdempotent}。`,
     `- ${ORCH_HARD_CONSTRAINTS.failureSemantics}。`,
+    `- ${ORCH_HARD_CONSTRAINTS.nodeSettledSignal}。`,
+    `- ${ORCH_HARD_CONSTRAINTS.inputBindings}。`,
+    `- ${ORCH_HARD_CONSTRAINTS.safeTermination}。`,
     ...(langRule ? [`- ${langRule}`] : []),
     '',
     renderDynamicState(dynamic),
