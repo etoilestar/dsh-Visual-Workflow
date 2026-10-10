@@ -25,7 +25,7 @@ sequenceDiagram
     participant R as NodeAgentRunner
     participant D as DSH 公开子代理服务
     P->>W: wf_run_node（当前预算内一次 attempt）
-    W->>W: 启动/执行窗口互斥；通过后才记账和输入预检
+    W->>W: 启动/执行窗口互斥；通过输入预检后才记账
     W->>R: 最新任务块、权限与取消状态
     R->>D: sendMessage(oldChildId)
     alt 正常接纳或冷恢复
@@ -59,13 +59,15 @@ sequenceDiagram
 
 没有声明文件输入要求、也没有连接文件输入节点的普通节点，不会被强制检查 CSV。本修复不会把销售测试的输入约束应用到所有角色节点；自由文本 schema 保持原有兼容行为。
 
-销售分析验收必须显式配置以下内容：
+原有 explicit 模式的销售分析验收配置如下。新的轻量 auto 模式无需 File Node/ctx，可从工作台明确上传并绑定首节点输入；详见 [运行输入与交接](runtime-input-handoff.md)。
+
+保留原显式模式时配置以下内容：
 
 1. CSV 文件节点，例如 `csv`，使用既有受管文件配置，或在启动运行时提供 `fileBindings: { csv: ["容器内实际 CSV 路径"] }`。路径必须在当前会话中可读且获得现有授权。
 2. `csv.ctx-out → load_data.ctx-in` 连线，以及各处理节点之间的 `ctx-out → ctx-in` 连线。流程 `flow` 连线用于调度顺序，本身不传递文件或上游产物。
 3. 销售角色节点的 `data.execution.inputSource = "ctx"` 与 `data.execution.outputFiles`。五节点分别声明 `output/raw.json`、`output/quality.json`、`output/stats.json`、`output/summary.md`、`output/final_report.md`，由有效结算核对本次执行的实际产物；只写 Prompt 或自由文本 outputSchema 不替代这些机器可验证的声明。
 
-附件上传不等于文件绑定。附件在宿主会话中出现后，仍须将其显式绑定到对应 CSV 文件节点，再启动或按既有规则恢复运行。多个 CSV 由用户指定，不自动搜索目录、猜测 CSV 路径或选择附件。保留现有授权、工具白名单和 sandbox 检查；绑定成功也不代表子代理拥有超出既有权限的文件访问能力。`scripts/run-sales-live.mjs` 已配置上述节点、连线与产物声明，并通过 `SALES_CSV` 显式绑定输入。
+附件上传不等于文件绑定。附件在宿主会话中出现后，仍须将其显式绑定到对应 CSV 文件节点，再启动或按既有规则恢复运行。多个 CSV 由用户指定，不自动搜索目录、猜测 CSV 路径或选择附件。保留现有授权、工具白名单和 sandbox 检查；绑定成功也不代表子代理拥有超出既有权限的文件访问能力。`scripts/run-sales-live.mjs --explicit` 保留上述节点、连线与产物声明，并通过 `SALES_CSV` 显式绑定输入；默认脚本使用受控上传和 auto 交接。
 
 ## 文件说明
 
@@ -82,7 +84,7 @@ sequenceDiagram
 | `src/host/orchestrator/runtime-observe.ts` | 结算代际核对、有界早到缓冲、产物验证副本及提交前检查。 |
 | `src/host/orchestrator/execution-inputs.ts` | 合法 ctx 来源检查、复用既有授权、下游重新核对上游产物。 |
 | `src/host/orchestrator/graph-facts.ts` | 已验证输入路径与完成产物路径显式进入任务块。 |
-| `src/host/prompts/orchestration.ts` | 输入绑定、业务完成证据与失败收尾在首段/末段重申；纯编排父代理不搜索或处理 CSV。 |
+| `src/host/prompts/orchestration.ts` | 输入绑定、业务完成证据与失败收尾在首段/末段重申；纯编排父代理不搜索或处理未授权输入。 |
 | `scripts/run-sales-live.mjs` | 保留可配置路由/地址/认证，进一步核对真实 raw/quality 中间产物。 |
 | `package.json` | 修复版本 `0.10.1`，不添加运行时官方依赖。 |
 | `tests/host/agent/{runner,model-selection}.test.ts` | 接纳边界、恢复、权限/Prompt/模型、并发、取消及清理。 |

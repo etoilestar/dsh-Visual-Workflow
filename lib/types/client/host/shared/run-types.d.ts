@@ -1,3 +1,4 @@
+import type { RuntimeInputs, HandoffPolicy } from "./runtime-types.js";
 import type { OrgMeta } from './org-meta.js';
 /** run 运行状态：运行/暂停/完成/失败/停止/中断（架构文档 §4.3 状态机 + §6.1）。 */
 export type RunStatus = 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted';
@@ -42,6 +43,10 @@ export interface RunSnapshot {
     /** 实际会话工作目录与本次运行的文件绑定；不改写模板的文件节点。 */
     workingDirectory?: string;
     fileBindings?: Record<string, string[]>;
+    runtimeInputs?: RuntimeInputs;
+    handoffPolicy?: HandoffPolicy;
+    inputRevision?: number;
+    workflowInputNodeId?: string;
     /**
      * 元参数冻结副本（D-13）：startRun 时把「有效元参数（模板 ← 实例覆盖）」的副本
      * 写入快照，供审计与后续评估/重组还原当时预算；续跑继承旧快照的冻结值（不重读）。
@@ -84,6 +89,10 @@ export interface RunSnapshot {
             path: string;
             size: number;
             verifiedAt: string;
+            runId?: string;
+            nodeId?: string;
+            attempt?: number;
+            signature?: string;
         }>;
         /** 回合明细（可续跑节点每次被唤醒执行为一回合；P0-2）。 */
         turns?: Array<{
@@ -129,6 +138,7 @@ export interface RunFailure {
     occurredAt: string;
 }
 export interface NodeAttempt {
+    runId?: string;
     attempt: number;
     phase: "child_start" | "child_execute" | "settled";
     startedAt: string;

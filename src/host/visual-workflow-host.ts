@@ -185,6 +185,7 @@ export class VisualWorkflowHost extends Service {
       resolveRolePrompt: (node) => resolveRolePrompt(node),
       workingDirectory: async (sessionId) => (await sessionCwdResolver(ctx)(sessionId)) ?? undefined,
       authorizedInputFiles: async (sessionId) => this.agents.authorizedInputFiles(sessionId),
+      sessionInputFiles: async (sessionId) => this.agents.sessionInputFiles(sessionId),
       config: {
         outputFullLimit: config.outputFullLimit,
         documentTextLimit: config.documentTextLimit,

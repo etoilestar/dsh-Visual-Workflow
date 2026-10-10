@@ -19,6 +19,8 @@ import { GLOBAL_RUN_CALL_LIMIT, type CallerInfo, type GroupMemberPlan, type Grou
 import { RuntimeLaunch } from './runtime-launch.js'
 import type { GroupNode, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import { preflightNodeInputs } from './execution-inputs.js'
+import { runtimeInputsOf, validateRequiredInputs } from "./runtime-inputs.js"
+import { boundNodeInputs, effectiveNodeInputs } from "./input-handoff.js"
 
 export class RuntimeExecute extends RuntimeLaunch {
   // ---- wf_run_node ----------------------------------------------------------
@@ -69,6 +71,7 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
     const nodeId = String(args?.nodeId ?? '').trim()
     if (!nodeId) throw new WfError('wf_run_node 需要参数 nodeId', 'WF_BAD_ARGS')
+    if (run.inputBindingDone) throw new WfError("输入正在绑定，请稍后重试", "WF_BUSY")
     if (run.controller.signal.aborted) throw new WfError('该工作流已停止', 'WF_CANCELLED')
 
     // 执行者模式：父代理开始调度（首次 wf_run_node 成功前）→ 自身节点任务视为完成，
@@ -86,6 +89,8 @@ export class RuntimeExecute extends RuntimeLaunch {
       if (!source) throw new WfError(`虚拟节点引用的主节点不存在：${node.proxySourceId}`, 'WF_NODE_MISSING')
       node = source
     }
+
+    if (run.inputBindingDone) throw new WfError("输入正在绑定，请稍后重试", "WF_BUSY")
 
     // 暂停门：暂停节点不派生子代理，run 置 paused + 断点持久化
     if (node.kind === 'pause') {
@@ -146,6 +151,26 @@ export class RuntimeExecute extends RuntimeLaunch {
       throw new WfError(`节点「${labelOf(node)}」的子代理仍在执行，请等待结算后再调度`, "WF_BUSY")
     }
 
+    const validated = await runtimeInputsOf({ nodeInputs: { [node.id]: boundNodeInputs(run.snapshot, node.id) } }, flow, { sessionId: run.snapshot.sessionId, managedRoot: this.deps.store.root, files: await this.deps.sessionInputFiles?.(run.snapshot.sessionId) ?? [] })
+    assertActive()
+    const inputSnapshot = structuredClone(run.snapshot)
+    inputSnapshot.runtimeInputs = validated
+    inputSnapshot.workflowInputNodeId = undefined
+    const effectiveInputs = await effectiveNodeInputs(flow, node, inputSnapshot)
+    validateRequiredInputs(node, effectiveInputs)
+    const outputBaseline = await preflightNodeInputs(flow, node, inputSnapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(run.snapshot.sessionId), Object.values(effectiveInputs).some((values) => values.length))
+    assertActive()
+    const assertInputsCurrent = (): void => {
+      for (const value of Object.values(effectiveInputs).flat()) if (value.origin?.source === "node") {
+        const previous = inputSnapshot.nodes.find((record) => record.nodeId === value.origin?.nodeId)
+        const current = run.snapshot.nodes.find((record) => record.nodeId === value.origin?.nodeId)
+        if (!previous || !current || current.attempts !== previous.attempts || current.status !== previous.status || current.childId !== previous.childId || current.output !== previous.output) throw new WfError("上游在输入预检期间发生变化，请重新调度", "WF_INPUT_UPSTREAM_UNAVAILABLE")
+      }
+    }
+    assertInputsCurrent()
+    const blocks = buildNodeBlocks({ flow, node, snapshot: inputSnapshot, effectiveInputs, documentTextLimit: this.deps.config.documentTextLimit, systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE })
+    run.snapshot.fileBindings = inputSnapshot.fileBindings
+
     // 硬护栏：全局调用上限 + 单节点重试上限
     run.callCount += 1
     if (run.callCount > GLOBAL_RUN_CALL_LIMIT) {
@@ -170,6 +195,8 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
 
     setNodeStatus(run.snapshot, resolvedNodeId, 'running', { attempts: attempt, now: this.now(), provider: node.data.provider || run.snapshot.parentRoute?.provider, model: node.data.model || run.snapshot.parentRoute?.model })
+    const history = run.snapshot.nodes.find((record) => record.nodeId === resolvedNodeId)?.attemptHistory?.at(-1)
+    if (history && Object.keys(outputBaseline).length) history.outputBaseline = outputBaseline
     this.log().info(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, attempt, phase: "child_start", status: "requested", provider: node.data.provider, model: node.data.model }))
     await this.persistWarn(run)
 
@@ -187,15 +214,8 @@ export class RuntimeExecute extends RuntimeLaunch {
     }
 
     try {
-      await preflightNodeInputs(flow, node, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(run.snapshot.sessionId))
       assertActive()
-      const blocks = buildNodeBlocks({
-      flow,
-      node,
-      snapshot: run.snapshot,
-      documentTextLimit: this.deps.config.documentTextLimit,
-      systemLanguage: this.deps.systemLanguage?.() ?? DEFAULT_SYSTEM_LANGUAGE,
-    })
+      assertInputsCurrent()
       const { childId, replacedChildId } = await this.deps.runner.startNodeTask({
         runId: run.snapshot.id,
         attempt,
@@ -302,6 +322,9 @@ export class RuntimeExecute extends RuntimeLaunch {
       )
     }
 
+    // New runtime bindings use the existing individual-member dispatch path; team execution stays unchanged.
+    if (memberIds.some((id) => Object.values(boundNodeInputs(run.snapshot, id)).some((values) => values.length) || Object.keys((nodeById(flow, id) as RoleNode | undefined)?.data?.execution?.inputs ?? {}).length)) throw new WfError("整组启动不交付运行输入；请通过 wf_run_node 逐个启动成员，保留原有 ctx 与团队协作", "WF_INPUT_GROUP_UNSUPPORTED")
+
     // 硬护栏与单节点路径同口径（全局调用上限 + 组级尝试计数 + 组级参数覆盖）
     run.callCount += 1
     if (run.callCount > GLOBAL_RUN_CALL_LIMIT) {
@@ -354,7 +377,11 @@ export class RuntimeExecute extends RuntimeLaunch {
       const member = plans.find((plan) => plan.node.id === nodeId)?.node
       setNodeStatus(run.snapshot, nodeId, 'running', { attempts: count, now: this.now(), provider: member?.data.provider || run.snapshot.parentRoute?.provider, model: member?.data.model || run.snapshot.parentRoute?.model })
       await this.persistWarn(run)
-      if (member) await preflightNodeInputs(flow, member, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(sessionId))
+      if (member) {
+        const baseline = await preflightNodeInputs(flow, member, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(sessionId))
+        const history = run.snapshot.nodes.find((record) => record.nodeId === member.id)?.attemptHistory?.at(-1)
+        if (history && Object.keys(baseline).length) history.outputBaseline = baseline
+      }
     }
     const onMemberStarted = async (member: GroupStartResult['members'][number]): Promise<void> => {
       await onMemberStarting(member.nodeId)

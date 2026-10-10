@@ -30,5 +30,6 @@ export declare class TemplateEndpoints extends VisualWorkflowApiBase {
     fileUpload(args: {
         name?: unknown;
         base64?: unknown;
+        sessionId?: unknown;
     }): Promise<unknown>;
 }

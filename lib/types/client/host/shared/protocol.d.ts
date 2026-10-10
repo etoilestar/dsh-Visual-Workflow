@@ -81,6 +81,8 @@ export declare const EP_TOOL_SWITCH_PUT = "toolSwitchPut";
 /** 批量设置一组工具开/关状态端点名（组合管理「标签一键开关」用；全局即时生效）。 */
 export declare const EP_TOOL_SWITCH_PUT_MANY = "toolSwitchPutMany";
 /** 运行启动端点名。 */
+export declare const EP_RUNTIME_INPUT_OPTIONS = "runtimeInputOptions";
+export declare const EP_RUN_INPUT_BIND = "runInputBind";
 export declare const EP_RUN = "run";
 /** 运行状态轮询端点名。 */
 export declare const EP_RUN_STATUS = "runStatus";

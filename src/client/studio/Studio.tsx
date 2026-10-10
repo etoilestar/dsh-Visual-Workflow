@@ -1,3 +1,5 @@
+import { useRuntimeInputs } from "../hooks/use-runtime-inputs.js"
+import { RuntimeInputsDialog } from "../components/runtime-inputs-dialog.js"
 // src/client/studio/Studio.tsx
 //
 // 工作台主组件（照搬旧项目 studio.js 的布局与交互流程，TSX 化 + 新模型装配）：
@@ -76,7 +78,8 @@ export function Studio({ t, sessionId, remote: remoteProp, onRunImmersive }: Stu
   const selection = useSelection(dispatch)
   const history = useGraphHistory(state, dispatch)
   const guard = useUnsavedGuard(state, dispatch)
-  const runControl = useRunControl(dispatch, remote)
+  const runtimeInputs = useRuntimeInputs(remote, t, `${state.sessionId}:${state.currentId ?? ""}`)
+  const runControl = useRunControl(dispatch, remote, runtimeInputs.prepare, runtimeInputs.lifecycle)
   const serviceControl = useServiceControl(dispatch, remote)
   const modeSwitch = useModeSwitch(dispatch)
   const panels = usePanelLayout(state, dispatch)
@@ -283,6 +286,7 @@ export function Studio({ t, sessionId, remote: remoteProp, onRunImmersive }: Stu
 
   // ---------- 渲染（委托 StudioLayout 纯展示层） ----------
   return (
+    <>
     <StudioLayout
       t={t}
       state={state}
@@ -338,6 +342,9 @@ export function Studio({ t, sessionId, remote: remoteProp, onRunImmersive }: Stu
       onSelectFlowAsset={selectFlowAsset}
       onPlaceRoleAsset={placeRoleAsset}
     />
+    {state.mode === "mode1" && currentFlow && state.run.runId && <button type="button" className="wf-btn wf-runtime-bind-control" onClick={() => { void runtimeInputs.prepare(currentFlow.sessionId, currentFlow.id, state.run.runId!, true).catch(toastError) }}>{t.runtimeBindButton}</button>}
+    {runtimeInputs.dialog && <RuntimeInputsDialog state={runtimeInputs.dialog} t={t} onCancel={runtimeInputs.cancel} onChange={runtimeInputs.change} onAdd={runtimeInputs.add} onRemove={runtimeInputs.remove} onUpload={(target, name, file) => { void runtimeInputs.upload(target, name, file) }} onSubmit={() => { void runtimeInputs.submit() }} />}
+    </>
   )
 }
 

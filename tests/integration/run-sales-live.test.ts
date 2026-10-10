@@ -32,7 +32,7 @@ it.each([true, false])("test_sales_live_configurable_http_boundary_prepare_%s_ke
     const { args } = JSON.parse(body)
     requests.push({ endpoint, args })
     const values: Record<string, unknown> = {
-      createSession: { sessionId: "controlled-session" }, putWorkflow: {}, run: { runId: "controlled-run" },
+      createSession: { sessionId: "controlled-session" }, fileUpload: { managedPath: "data/files/upload.csv" }, putWorkflow: {}, run: { runId: "controlled-run" },
       runStatus: { status: "completed", nodes: ["load_data", "quality_check", "sales_stats", "summary_gen", "report_gen"].map((nodeId) => ({ nodeId, status: "ok" })) },
     }
     response.setHeader("content-type", "application/json")
@@ -51,8 +51,15 @@ it.each([true, false])("test_sales_live_configurable_http_boundary_prepare_%s_ke
     await expect(result).rejects.toMatchObject({ stderr: expect.stringContaining("load_data lacks actual child/route/artifact evidence") })
     expect(JSON.parse(await readFile(join(workspace, "live-run.json"), "utf8")).status).toBe("completed")
   }
-  const flow = requests.find(({ endpoint }) => endpoint === "putWorkflow")!.args.flow as { mode: string; nodes: Array<{ kind: string; data: { provider: string; model: string; presetId: string; execution?: { requiredTools: string[] } } }> }
+  const flow = requests.find(({ endpoint }) => endpoint === "putWorkflow")!.args.flow as { mode: string; lines: Array<{ targetHandle: string }>; nodes: Array<{ kind: string; data: { provider: string; model: string; presetId: string; execution?: { requiredTools: string[] } } }> }
   expect(flow.mode).toBe("mode1")
+  expect(flow.nodes.some((node) => node.kind === "file")).toBe(false)
+  expect(flow.lines.some((line) => line.targetHandle === "ctx-in")).toBe(false)
+  if (!prepareOnly) {
+    expect(requests.find(({ endpoint }) => endpoint === "run")?.args).toMatchObject({ handoffPolicy: "auto", runtimeInputs: { nodeInputs: { load_data: { source: [{ kind: "file", fileRef: { source: "managed", path: "data/files/upload.csv" } }] } } } })
+    const upload = requests.find(({ endpoint }) => endpoint === "fileUpload")?.args as { base64: string }
+    expect(Buffer.from(upload.base64, "base64").toString()).toBe(await readFile(env.SALES_CSV, "utf8"))
+  }
   const nodes = flow.nodes.filter(({ kind }) => kind === "agent")
   expect(nodes).toHaveLength(5)
   for (const { data } of nodes) {
@@ -78,7 +85,7 @@ it.each(["raw", "quality", "valid"])("test_sales_live_fake_HTTP_%s_validates_act
     if (request.method === "GET") { response.end("ready"); return }
     const endpoint = request.url!.split("/").at(-1)!
     const values: Record<string, unknown> = {
-      createSession: { sessionId: "controlled-session" }, putWorkflow: {}, run: { runId: "controlled-run" },
+      createSession: { sessionId: "controlled-session" }, fileUpload: { managedPath: "data/files/upload.csv" }, putWorkflow: {}, run: { runId: "controlled-run" },
       runStatus: { status: "completed", parentRoute: { provider: "fake", model: "fake" }, nodes: ["load_data", "quality_check", "sales_stats", "summary_gen", "report_gen"].map((nodeId) => ({ nodeId, status: "ok", childId: `fake-${nodeId}`, attempts: 1, provider: "fake", model: "fake", artifacts: [{ path: "controlled" }] })) },
     }
     response.setHeader("content-type", "application/json")
@@ -94,4 +101,36 @@ it.each(["raw", "quality", "valid"])("test_sales_live_fake_HTTP_%s_validates_act
   } else {
     await expect(result).rejects.toMatchObject({ stderr: expect.stringContaining(kind === "raw" ? "raw.json must preserve all 11 input rows" : "0 !== 2") })
   }
+})
+
+it.each(["text", "json"])("test_inputs_live_fake_HTTP_%s_uses_serial_auto_without_CSV_or_file_nodes", async (kind) => {
+  const workspace = await mkdtemp(join(tmpdir(), "inputs-script-test-"))
+  cleanups.push(() => rm(workspace, { recursive: true, force: true }))
+  const requests: Array<{ endpoint: string; args: Record<string, unknown> }> = []
+  const ids = kind === "text" ? ["uppercase", "annotate", "summarize"] : ["produce", "consume"]
+  const final = kind === "text" ? "NOTE: HELLO WORKFLOW" : '{"doubled":42}'
+  const server = createServer(async (request, response) => {
+    let body = ""
+    for await (const chunk of request) body += String(chunk)
+    if (request.method === "GET") { response.end("ready"); return }
+    const endpoint = request.url!.split("/").at(-1)!
+    const { args } = JSON.parse(body)
+    requests.push({ endpoint, args })
+    const values: Record<string, unknown> = {
+      createSession: { sessionId: "controlled-session" }, putWorkflow: {}, run: { runId: "controlled-run" },
+      runStatus: { status: "completed", parentRoute: { provider: "fake", model: "fake" }, nodes: ids.map((nodeId) => ({ nodeId, status: "ok", childId: `fake-${nodeId}`, attempts: 1, provider: "fake", model: "fake", output: final })) },
+    }
+    response.setHeader("content-type", "application/json")
+    response.end(JSON.stringify({ ok: true, value: values[endpoint] }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  cleanups.push(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())))
+  const port = (server.address() as { port: number }).port
+  const { stdout } = await execute(process.execPath, ["scripts/run-sales-live.mjs", `--${kind}`], { env: { ...process.env, DSH_BASE_URL: `http://127.0.0.1:${port}`, DSH_TEST_PROVIDER: "fake", DSH_TEST_MODEL: "fake", DSH_TEST_WORKSPACE: workspace, DSH_WEB_LOG: "", SALES_CSV: join(workspace, "absent.csv") } })
+  expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toMatchObject({ status: "passed", testCase: kind, businessNodes: ids.length, result: final })
+  const flow = requests.find(({ endpoint }) => endpoint === "putWorkflow")?.args.flow as { nodes: Array<{ kind: string }>; lines: Array<{ targetHandle: string }> }
+  expect(flow.nodes.some((node) => node.kind === "file")).toBe(false)
+  expect(flow.lines.some((line) => line.targetHandle === "ctx-in")).toBe(false)
+  expect(requests.some(({ endpoint }) => endpoint === "fileUpload")).toBe(false)
+  expect(requests.find(({ endpoint }) => endpoint === "run")?.args).toMatchObject({ handoffPolicy: "auto", runtimeInputs: { nodeInputs: { [ids[0]]: { source: [{ kind }] } } } })
 })

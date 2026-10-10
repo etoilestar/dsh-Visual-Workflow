@@ -11,6 +11,9 @@ if (process.argv.includes("--help")) {
 Required: DSH_BASE_URL, DSH_TEST_PROVIDER, DSH_TEST_MODEL (exact DSH routing identifiers).
 Optional: DSH_WEB_LOG (local DSH web log used for authentication; never printed),
 DSH_TEST_WORKSPACE (fresh host-visible directory), SALES_CSV, DSH_TEST_TIMEOUT_MS.
+--text: three serial Agents receiving text; --json: two serial Agents receiving JSON.
+Default: five sales Agents receiving an explicitly uploaded file. All default to auto,
+with no File Node and no ctx edges. --explicit retains the original sales ctx fixture.
 --prepare-only creates a test session and workflow without starting any model run;
 only DSH_BASE_URL is required in this mode. --help has no side effects.
 This script checks real child IDs, node settlement, artifacts and report contents.
@@ -23,16 +26,19 @@ assert.ok(["http:", "https:"].includes(new URL(origin).protocol), "DSH_BASE_URL 
 const provider = process.env.DSH_TEST_PROVIDER
 const model = process.env.DSH_TEST_MODEL
 const prepareOnly = process.argv.includes("--prepare-only")
+const testCase = process.argv.includes("--text") ? "text" : process.argv.includes("--json") ? "json" : "sales"
+const explicit = process.argv.includes("--explicit")
+assert.ok(!explicit || testCase === "sales", "--explicit supports the legacy sales fixture only")
 assert.ok(prepareOnly || (provider && model), "Set DSH_TEST_PROVIDER and DSH_TEST_MODEL to configured DSH routing names; credentials remain in DSH settings")
 const timeoutMs = Number(process.env.DSH_TEST_TIMEOUT_MS ?? 600000)
 assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, "DSH_TEST_TIMEOUT_MS must be positive")
 const workspace = resolve(process.env.DSH_TEST_WORKSPACE ?? await mkdtemp(join(tmpdir(), "dsh-sales-live-")))
 const sourceCsv = resolve(process.env.SALES_CSV ?? fileURLToPath(new URL("../tests/fixtures/sales_workflow_test.csv", import.meta.url)))
-await readFile(sourceCsv, "utf8") // actual input must be readable in the same host filesystem
+if (testCase === "sales") await readFile(sourceCsv, "utf8") // actual input must be readable in the same host filesystem
 await mkdir(workspace, { recursive: true })
 await mkdir(resolve(workspace, "output"), { recursive: true })
 const csv = resolve(workspace, "sales_workflow_test.csv")
-if (sourceCsv !== csv) await copyFile(sourceCsv, csv)
+if (testCase === "sales" && sourceCsv !== csv) await copyFile(sourceCsv, csv)
 const login = new URL("/", origin)
 const token = process.env.DSH_WEB_LOG ? (await readFile(process.env.DSH_WEB_LOG, "utf8")).match(/[?&]token=([^\s&]+)/)?.[1] : undefined
 if (token) login.searchParams.set("token", token)
@@ -46,41 +52,56 @@ async function api(endpoint, args) {
   if (!response.ok || result.ok !== true) throw new Error(`${endpoint}: ${result.error?.code ?? response.status}`)
   return result.value
 }
-const created = await api("createSession", { workspacePath: workspace, label: "销售 CSV 真实验收" })
+const created = await api("createSession", { workspacePath: workspace, label: `${testCase} 运行输入验收` })
 const sessionId = created.sessionId
 assert.ok(typeof sessionId === "string", "createSession did not return sessionId")
-const ids = ["load_data", "quality_check", "sales_stats", "summary_gen", "report_gen"]
+const ids = testCase === "sales" ? ["load_data", "quality_check", "sales_stats", "summary_gen", "report_gen"] : testCase === "text" ? ["uppercase", "annotate", "summarize"] : ["produce", "consume"]
 const outputs = ["raw.json", "quality.json", "stats.json", "summary.md", "final_report.md"].map((name) => resolve(workspace, "output", name))
-const tasks = [
-  `实际使用 read 读取 ctx 给出的 CSV 路径，按表头解析全部记录（保留重复行与空单元格），写 JSON 记录数组到 ${outputs[0]}。最终回复准确给出该文件绝对路径。`,
+const salesTasks = [
+  `实际使用 read 读取运行输入或显式 ctx 给出的 CSV 路径，按表头解析全部记录（保留重复行与空单元格），写 JSON 记录数组到 ${outputs[0]}。最终回复准确给出该文件绝对路径。`,
   `实际读取上游 JSON 文件，统计原始记录数、完全重复记录数、空单元格数；去重并剔除任何有缺失单元格的记录，保留有效记录。写 JSON {records,duplicates,missingCells,valid:[记录对象]} 到 ${outputs[1]}。最终回复准确给出文件绝对路径。`,
   `实际读取上游质量 JSON，以有效记录 sales_amount 计算统计。写 JSON {records,duplicates,missingCells,valid:有效记录数,total,average:两位小数字符串,maximum:{id:order_id,amount},minimum:{id:order_id,amount}} 到 ${outputs[2]}。最终回复准确给出文件绝对路径。`,
   `实际读取上游统计 JSON，生成中文销售摘要，明确所有数量、总额、平均额、最大和最小记录及订单号；写入 ${outputs[3]}，最终回复准确给出文件绝对路径。`,
   `实际读取上游摘要，生成完整中文 Markdown 销售报告，保留全部统计及去重/缺失值处理说明；写入 ${outputs[4]}，最终回复准确给出文件绝对路径。`,
 ]
+const tasks = testCase === "sales" ? salesTasks : testCase === "text" ? [
+  "将运行输入 source 中的英文文本转为大写，最终回复仅包含转换后的文本。",
+  "读取自动交接的 upstreamText，最终回复为 NOTE: 加空格再加上游全文，不省略。",
+  "总结自动交接的 upstreamText，必须逐字保留 NOTE: HELLO WORKFLOW。",
+] : [
+  '读取运行输入 source 的 JSON，最终回复仅为原始 JSON 对象，不使用代码围栏。',
+  '解析自动交接的 upstreamText，将 value 乘以 2，最终回复仅为 {"doubled":数字}，不使用代码围栏。',
+]
 const role = (id, kind, systemPrompt, execution) => ({ id, kind, position: { x: 0, y: 0 }, data: { label: id, systemPrompt, provider: provider ?? "", model: model ?? "", presetId: "standard", retryLimit: 2, reactLimit: 50, inputSchema: "", outputSchema: "", ...(execution ? { execution } : {}) } })
-const flowId = `sales-live-${Date.now()}`
+const flowId = `inputs-${testCase}-${Date.now()}`
 const flow = {
-  id: flowId, sessionId, mode: "mode1", revision: 0, name: "销售 CSV 真实验收", description: "用户提供的 11 行 CSV；通过文件节点绑定输入，所有交接显式走 ctx。",
+  id: flowId, sessionId, mode: "mode1", revision: 0, name: `${testCase} 运行输入验收`, description: `${testCase}: ${explicit ? "legacy explicit ctx" : "runtime inputs + serial auto handoff"}`,
   nodes: [
     { id: "start", kind: "start", position: { x: 0, y: 0 }, data: { label: "启动" } },
-    role("parent", "parent", "你是编排父代理。只按流程调度五个业务子代理，等待其实际完成后调度下游，不代替它们执行数据任务。核对节点状态和报告文件后调用 wf_finish；节点失败须如实处理并报告。"),
-    ...ids.map((id, index) => role(id, "agent", tasks[index], { inputSource: "ctx", requiredTools: ["read", "write"], outputFiles: [outputs[index]] })),
+    role("parent", "parent", `你是编排父代理。只按流程调度 ${ids.length} 个子代理，等待有效结算后调度下游，不代替它们执行节点任务。核对节点状态和已声明产物后调用 wf_finish；节点失败须如实处理并报告。`),
+    ...ids.map((id, index) => role(id, "agent", tasks[index], testCase === "sales" ? { ...(explicit ? { inputSource: "ctx" } : index === 0 ? { inputs: { source: { kind: "file" } } } : {}), requiredTools: ["read", "write"], outputFiles: [outputs[index]] } : index === 0 ? { inputs: { source: { kind: testCase } } } : {})),
     { id: "end", kind: "end", position: { x: 0, y: 0 }, data: { label: "结束" } },
-    { id: "csv", kind: "file", position: { x: 0, y: 0 }, data: { label: "销售 CSV 输入", fileKind: "file" } },
+    ...(explicit ? [{ id: "csv", kind: "file", position: { x: 0, y: 0 }, data: { label: "销售 CSV 输入", fileKind: "file" } }] : []),
   ],
   lines: [],
 }
 const chain = ["start", ...ids, "end"]
 flow.lines.push(...chain.slice(1).map((target, index) => ({ id: `flow-${index}`, source: chain[index], target, sourceHandle: "flow-out", targetHandle: "flow-in" })))
-flow.lines.push(...["csv", ...ids.slice(0, -1)].map((source, index) => ({ id: `ctx-${index}`, source, target: ids[index], sourceHandle: "ctx-out", targetHandle: "ctx-in" })))
+if (explicit) flow.lines.push(...["csv", ...ids.slice(0, -1)].map((source, index) => ({ id: `ctx-${index}`, source, target: ids[index], sourceHandle: "ctx-out", targetHandle: "ctx-in" })))
 await writeFile(resolve(workspace, "live-flow.json"), JSON.stringify(flow, null, 2))
 await api("putWorkflow", { sessionId, flow })
 if (prepareOnly) {
   console.log(JSON.stringify({ status: "prepared", sessionId, flowId, workspace, modelRunStarted: false }))
   process.exit(0)
 }
-const { runId } = await api("run", { sessionId, flowId, fileBindings: { csv: [csv] } })
+const runtimeInputs = { workflowInputs: {}, nodeInputs: {} }
+if (!explicit) {
+  const source = testCase === "sales"
+    ? { kind: "file", fileRef: { source: "managed", path: (await api("fileUpload", { sessionId, name: `${flowId}-input.csv`, base64: (await readFile(csv)).toString("base64") })).managedPath } }
+    : testCase === "text" ? { kind: "text", value: "hello workflow" } : { kind: "json", value: { value: 21 } }
+  runtimeInputs.nodeInputs[ids[0]] = { source: [source] }
+}
+const { runId } = await api("run", { sessionId, flowId, ...(explicit ? { fileBindings: { csv: [csv] } } : { handoffPolicy: "auto", runtimeInputs }) })
 console.log(JSON.stringify({ phase: "started", runId, sessionId, flowId, provider, model, workspace }))
 const deadline = Date.now() + timeoutMs
 let snapshot
@@ -101,9 +122,16 @@ assert.equal(snapshot.status, "completed", `run ${runId}: ${snapshot.status}; in
 for (const id of ids) {
   const node = snapshot.nodes.find((node) => node.nodeId === id)
   assert.equal(node?.status, "ok", `${id} did not complete`)
-  assert.ok(node.childId && node.attempts > 0 && node.provider && node.model && node.artifacts?.length, `${id} lacks actual child/route/artifact evidence`)
+  assert.ok(node.childId && node.attempts > 0 && node.provider && node.model && (testCase !== "sales" || node.artifacts?.length), `${id} lacks actual child/route/artifact evidence`)
 }
 assert.ok(snapshot.parentRoute?.provider && snapshot.parentRoute?.model, "parent model route was not recorded")
+if (testCase !== "sales") {
+  const final = snapshot.nodes.find((node) => node.nodeId === ids.at(-1)).output.trim()
+  if (testCase === "text") assert.ok(final.includes("NOTE: HELLO WORKFLOW"), "serial text content was not preserved")
+  else assert.deepEqual(JSON.parse(final), { doubled: 42 })
+  console.log(JSON.stringify({ status: "passed", testCase, runId, businessNodes: ids.length, result: final }))
+  process.exit(0)
+}
 const raw = JSON.parse(await readFile(outputs[0], "utf8"))
 assert.ok(Array.isArray(raw) && raw.length === 11, "raw.json must preserve all 11 input rows")
 assert.equal(raw.filter((row) => row.order_id === "S008").length, 2, "raw.json lost the duplicated order")

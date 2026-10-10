@@ -36,6 +36,7 @@ export interface RunEntry {
   callCount: number
   /** 同一节点的派发窗口去重；finally 撤销，不进入持久化快照。 */
   dispatching?: Set<string>
+  inputBindingDone?: Promise<void>
   /** 最近活动时间戳（空闲看护基准）。 */
   lastActiveAt: number
   /** 阻塞等待表：`${runId}:${nodeId}` → waiter（wait:true 路径）。 */
@@ -128,6 +129,7 @@ export interface OrchestratorDeps {
   workingDirectory?: (sessionId: string) => Promise<string | undefined>
   /** 官方会话已接纳的附件路径；调用方不能通过 fileBindings 授予宿主文件权限。 */
   authorizedInputFiles?: (sessionId: string) => Promise<readonly string[]>
+  sessionInputFiles?: (sessionId: string) => Promise<readonly import("../shared/runtime-types.js").SessionInputFile[]>
   /** 配置子集。 */
   config: OrchestratorConfig
   /**
@@ -172,6 +174,8 @@ export interface MilestoneMarkResult {
 }
 
 export interface StartRunOptions {
+  runtimeInputs?: unknown
+  handoffPolicy?: unknown
   /** 文件节点 id → 实际输入路径数组；由运行边界校验未知 JSON。 */
   fileBindings?: unknown
   /** 运行模式（缺省 mode1；模式二由服务管理器传入 mode2）。 */

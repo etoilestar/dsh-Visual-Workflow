@@ -1,3 +1,4 @@
+import type { InputRequirement } from "./runtime-types.js"
 // 工作流图模型纯类型（shared 层）。
 //
 // 本文件是「节点/连线判别模型」的类型规范本体，定义节点与连线的判别类型形状，
@@ -62,6 +63,7 @@ export interface WorkflowValidationWarning {
 
 /** 可选的机器执行契约；inputSchema/outputSchema 仍为柔性文本说明。 */
 export interface NodeExecutionContract {
+  inputs?: Record<string, InputRequirement>
   inputSource?: 'ctx' | 'workspace' | 'runtime'
   requiredFiles?: string[]
   requiredTools?: string[]

@@ -92,10 +92,11 @@ export class TemplateEndpoints extends VisualWorkflowApiBase {
     return { deleted: true }
   }
   /** 受管文件上传：base64 内容 → data/files/<safeName>（原子发布；返回 managedPath）。 */
-  async fileUpload(args: { name?: unknown; base64?: unknown }): Promise<unknown> {
+  async fileUpload(args: { name?: unknown; base64?: unknown; sessionId?: unknown }): Promise<unknown> {
     const name = String(args?.name ?? '').trim()
     const base64 = String(args?.base64 ?? '')
     if (!name || !base64) throw httpError(400, 'requires name and base64')
-    return copyIntoManagedFile(this.host.dataDir, { name, base64 })
+    if (args.sessionId !== undefined && (typeof args.sessionId !== "string" || !args.sessionId.trim())) throw httpError(400, "sessionId must be a nonempty string")
+    return copyIntoManagedFile(this.host.dataDir, { name, base64, ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId as string }) })
   }
 }

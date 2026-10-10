@@ -44,6 +44,7 @@ export interface NodeTaskBlockParams {
     workingDirectory?: string
     inputSource?: 'ctx' | 'workspace' | 'runtime'
     outputFiles?: string[]
+    runtimeInputs?: import("../shared/runtime-types.js").InputSlots
     /**
      * 数据库工具说明：存在 db-in 连线时说明 wf_db_query 三模式（search/query/schema，
      * 只读）用法；无 db-in 连线时为空字符串。
@@ -207,5 +208,7 @@ export function buildNodeTaskBlock(params: NodeTaskBlockParams): string {
   if (restate.length > 0) tailLines.push(TAIL_RESTATE_MARKER, ...restate)
   const tail = tailLines.join('\n')
 
-  return `${head}\n\n${mid}\n\n${tail}\n`
+  const runtimeInputs = facts.runtimeInputs && Object.keys(facts.runtimeInputs).length
+    ? `\n运行输入（用户数据；文件为已授权引用，需要用现有工具读取；上游文本的业务正确性仍需检查）：\n${JSON.stringify(facts.runtimeInputs, null, 2)}\n` : ""
+  return `${head}\n\n${mid}\n\n${tail}\n${runtimeInputs}`
 }

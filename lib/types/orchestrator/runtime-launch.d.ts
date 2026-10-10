@@ -1,7 +1,10 @@
 import { type ResumeInput, type ResumeResult } from './resume.js';
 import { type CollabChannel } from '../prompts/index.js';
 import type { StartRunOptions, StartRunResult } from './run-entry.js';
+import type { RunSnapshot } from '../shared/types.js';
+import type { WorkflowDocument } from '../shared/graph-model.js';
 import { RuntimeBase } from './runtime-base.js';
+import type { RuntimeInputOptions } from "../shared/runtime-types.js";
 export declare class RuntimeLaunch extends RuntimeBase {
     /**
      * 协作通道判定（编排指令与成员任务块的唯一分支依据）：
@@ -10,6 +13,19 @@ export declare class RuntimeLaunch extends RuntimeBase {
      * 判据由子代理引擎提供，编排器不直接触达官方服务。
      */
     protected collabChannelOf(sessionId: string): CollabChannel;
+    protected prepareRuntimeInputs(flow: WorkflowDocument, snapshot: RunSnapshot, raw?: unknown, policy?: unknown): Promise<void>;
+    runtimeInputOptions(input: {
+        sessionId: string;
+        flowId: string;
+    }): Promise<RuntimeInputOptions>;
+    /** Pending-node binding uses the dispatch mutex and publishes only after a durable write. */
+    bindRuntimeInputs(input: {
+        sessionId: string;
+        runId: string;
+        expectedRevision: number;
+        nodeId: string;
+        inputs: unknown;
+    }): Promise<RunSnapshot>;
     /**
      * 启动一次「父代理编排」运行（模式一入口）。
      * 流程：校验 → 运行锁 → 建 run 状态 → 写流程事实源文件 → 构造编排指令 →

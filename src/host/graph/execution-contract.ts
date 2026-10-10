@@ -15,5 +15,15 @@ export function parseExecutionContract(raw: unknown): { value?: NodeExecutionCon
     if (!Array.isArray(data[key]) || data[key].some((item) => typeof item !== 'string' || !item.trim())) return { issue: `${key} 必须为非空字符串数组` }
     value[key] = [...new Set((data[key] as string[]).map((item) => item.trim()))]
   }
+  if (data.inputs !== undefined) {
+    if (!data.inputs || typeof data.inputs !== "object" || Array.isArray(data.inputs)) return { issue: "inputs 必须为对象" }
+    value.inputs = {}
+    for (const [name, raw] of Object.entries(data.inputs)) {
+      if (!name.trim() || ["__proto__", "constructor", "prototype"].includes(name) || !raw || typeof raw !== "object" || Array.isArray(raw)) return { issue: "输入声明无效" }
+      const requirement = raw as Record<string, unknown>
+      if (!["text", "json", "file"].includes(String(requirement.kind)) || requirement.required !== undefined && typeof requirement.required !== "boolean") return { issue: "输入必须声明 text/json/file 类型及可选 required" }
+      value.inputs[name] = { kind: requirement.kind as "text" | "json" | "file", ...(requirement.required === undefined ? {} : { required: requirement.required as boolean }) }
+    }
+  }
   return { value }
 }

@@ -6,6 +6,7 @@
 //
 // 语义：拷贝为深拷贝解耦——源文件删除后模板仍可用（模板记录 managedPath）。
 
+import { createHash } from "node:crypto"
 import { mkdir, readFile } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { atomicReplaceFile, withFileLock } from './atomic.js'
@@ -38,11 +39,18 @@ export function managedFilePath(dataDir: string, name: string): string {
  * 并发语义：同一目标的写入先经进程内锁串行化，再交给通用原子原语发布
  * （临时文件 + fsync + rename + 失败清理都由原语负责）。
  */
+/** Runtime uploads use a reserved session namespace; ordinary template files retain their existing names. */
+export function runtimeManagedPrefix(sessionId: string): string {
+  return `runtime-${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}-`
+}
+
 export async function copyIntoManagedFile(
   dataDir: string,
-  input: { name: string; base64?: string; sourcePath?: string },
+  input: { name: string; base64?: string; sourcePath?: string; sessionId?: string },
 ): Promise<{ managedPath: string; fileName: string }> {
-  const fileName = safeManagedName(input.name)
+  const original = safeManagedName(input.name)
+  if (!input.sessionId && /^runtime-[a-f0-9]{32}-/.test(original)) throw Object.assign(new Error("运行输入文件的保留命名空间必须提供 sessionId"), { code: "WF_INPUT_FILE_UNAUTHORIZED" })
+  const fileName = input.sessionId ? safeManagedName(`${runtimeManagedPrefix(input.sessionId)}${original}`) : original
   const target = managedFilePath(dataDir, fileName)
   await mkdir(managedFilesDir(dataDir), { recursive: true })
   let content: Buffer

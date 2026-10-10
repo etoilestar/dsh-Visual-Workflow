@@ -1,3 +1,4 @@
+import type { RuntimeInputs, HandoffPolicy } from "./runtime-types.js"
 // Host + Client 共享契约：run 运行快照（纯类型，零运行时依赖）。
 //
 // 职责：定义一次 run 的持久化状态形状（runs/<runId>.json）与节点执行记录及其
@@ -68,6 +69,10 @@ export interface RunSnapshot {
   /** 实际会话工作目录与本次运行的文件绑定；不改写模板的文件节点。 */
   workingDirectory?: string
   fileBindings?: Record<string, string[]>
+  runtimeInputs?: RuntimeInputs
+  handoffPolicy?: HandoffPolicy
+  inputRevision?: number
+  workflowInputNodeId?: string
   /**
    * 元参数冻结副本（D-13）：startRun 时把「有效元参数（模板 ← 实例覆盖）」的副本
    * 写入快照，供审计与后续评估/重组还原当时预算；续跑继承旧快照的冻结值（不重读）。
@@ -106,7 +111,7 @@ export interface RunSnapshot {
     model?: string
     failure?: RunFailure
     attemptHistory?: NodeAttempt[]
-    artifacts?: Array<{ path: string; size: number; verifiedAt: string }>
+    artifacts?: Array<{ path: string; size: number; verifiedAt: string; runId?: string; nodeId?: string; attempt?: number; signature?: string }>
     /** 回合明细（可续跑节点每次被唤醒执行为一回合；P0-2）。 */
     turns?: Array<{
       /** 回合开始时间。 */
@@ -159,6 +164,7 @@ export interface RunFailure {
 }
 
 export interface NodeAttempt {
+  runId?: string
   attempt: number
   phase: "child_start" | "child_execute" | "settled"
   startedAt: string
