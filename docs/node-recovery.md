@@ -10,7 +10,9 @@
 
 可正常延续的 child 继续通过公开 `sendMessage(parent, childId, blocks, { signal })` 派发。只有 Error 实例、异常名称 `SubagentError`、稳定代码 `NOT_RESUMABLE` 同时匹配，并且没有已接纳标记时，才允许一次重建。旧版公开实现的该错误发生在持久会话读取或 materialize 恢复阶段，早于 inbox 接纳。仅匹配 `unavailable` 文字、普通对象、权限拒绝、取消、关闭、缺少服务或结果不确定的异常均不重建；旧 `queuePrompt` 兜底不套用这个保证。
 
-首次创建、配置变化和不可恢复重建共用 `createNodeChild()`，保留工具与 Prompt 的 `withPending()` 创建窗口、隔离 provider、模型配置和完整最新任务块。成功才切换缓存；失败保留旧缓存、原始创建异常、投递异常及脱敏诊断，不循环。每次重建仍属于当前 `wf_run_node` 的一个 attempt，不绕过 retryLimit 或总调用上限。同节点和 proxy 派发窗口互斥，取消信号与暂停状态在重建前再次核对。
+首次创建、配置变化和不可恢复重建共用 `createNodeChild()`，保留工具与 Prompt 的 `withPending()` 创建窗口、隔离 provider、模型配置和完整最新任务块。成功才切换缓存；失败保留旧缓存、原始创建异常、投递异常及脱敏诊断，不循环。每次重建仍属于当前 `wf_run_node` 的一个 attempt，不绕过 retryLimit 或总调用上限。取消信号与暂停状态在重建前再次核对。
+
+同节点和 proxy 共享主节点的启动窗口与执行窗口互斥。返回 `started` 后，如果节点仍为 `running` 且对应当前 Workflow runId/attempt/childId 的有效 child 仍在 inflight，再次调度返回 `WF_BUSY`，不增加 callCount/attempts，不调用 `sendMessage` 或创建新 child。有效成功或失败结算完成后，允许在既有 retryLimit 内重试；产物验证尚未完成或收到旧宿主代际通知时仍忙碌。停止清除原运行 inflight，暂停中的 child 仍可正常结算，断点恢复沿用新 run 接管规则；退役或旧运行/attempt 登记不构成当前节点的忙碌依据。未结算时修改节点配置也不能重复派发，须先结算或显式停止后恢复。
 
 新 child 登记后旧 child 标记 retired 并从 inflight 移除，宿主清除记忆的工具/Prompt/模型。旧 Agent 已不可达时撤销作用域与护栏；仍在内存时保留已安装的权限和护栏，等官方 agent/disposed 事件再撤销，避免中断未完成时解除权限。普通结束只撤销已销毁的作用域，保留可延续状态。结算同时匹配 Workflow runId、attempt、childId，以及公开 `subagent/start` / `end` 的宿主驻留代际。官方事件的 runId 是驻留代际，不等于 Workflow runId；同 childId 冷恢复后也能拒绝旧代际结算。旧接口缺少字段时保留会话、当前 child 和 attempt 的兼容校验。无法仅凭缺少宿主代际的旧 payload 分辨同 ID 的两个驻留代际，不伪造该信息。
 
@@ -23,7 +25,7 @@ sequenceDiagram
     participant R as NodeAgentRunner
     participant D as DSH 公开子代理服务
     P->>W: wf_run_node（当前预算内一次 attempt）
-    W->>W: 输入预检 / 派发窗口互斥
+    W->>W: 启动/执行窗口互斥；通过后才记账和输入预检
     W->>R: 最新任务块、权限与取消状态
     R->>D: sendMessage(oldChildId)
     alt 正常接纳或冷恢复
@@ -53,6 +55,18 @@ sequenceDiagram
     P->>W: wf_finish（单次、幂等、释放锁）
 ```
 
+## 现场输入配置
+
+没有声明文件输入要求、也没有连接文件输入节点的普通节点，不会被强制检查 CSV。本修复不会把销售测试的输入约束应用到所有角色节点；自由文本 schema 保持原有兼容行为。
+
+销售分析验收必须显式配置以下内容：
+
+1. CSV 文件节点，例如 `csv`，使用既有受管文件配置，或在启动运行时提供 `fileBindings: { csv: ["容器内实际 CSV 路径"] }`。路径必须在当前会话中可读且获得现有授权。
+2. `csv.ctx-out → load_data.ctx-in` 连线，以及各处理节点之间的 `ctx-out → ctx-in` 连线。流程 `flow` 连线用于调度顺序，本身不传递文件或上游产物。
+3. 销售角色节点的 `data.execution.inputSource = "ctx"` 与 `data.execution.outputFiles`。五节点分别声明 `output/raw.json`、`output/quality.json`、`output/stats.json`、`output/summary.md`、`output/final_report.md`，由有效结算核对本次执行的实际产物；只写 Prompt 或自由文本 outputSchema 不替代这些机器可验证的声明。
+
+附件上传不等于文件绑定。附件在宿主会话中出现后，仍须将其显式绑定到对应 CSV 文件节点，再启动或按既有规则恢复运行。多个 CSV 由用户指定，不自动搜索目录、猜测 CSV 路径或选择附件。保留现有授权、工具白名单和 sandbox 检查；绑定成功也不代表子代理拥有超出既有权限的文件访问能力。`scripts/run-sales-live.mjs` 已配置上述节点、连线与产物声明，并通过 `SALES_CSV` 显式绑定输入。
+
 ## 文件说明
 
 | 文件 | 修改目的 |
@@ -74,7 +88,7 @@ sequenceDiagram
 | `tests/host/agent/{runner,model-selection}.test.ts` | 接纳边界、恢复、权限/Prompt/模型、并发、取消及清理。 |
 | `tests/host/orchestrator/{runtime-execute,runtime-observe,execution-inputs}.test.ts` | 预算、运行锁、代际与输入/产物失败路径。 |
 | `tests/host/prompts/orchestration.test.ts` | 经导出常量验证首段/末段约束与原字节稳定测试。 |
-| `tests/integration/node-recovery.test.ts` | 真实 runner、runtime、创建窗口与存储协作；DSH 传输替身。 |
+| `tests/integration/node-recovery.test.ts` | 真实 runner、runtime、创建窗口与存储协作；覆盖未结算忙碌、预算、主节点/proxy、结算后重试、停止/暂停恢复与安全重建；仅 DSH 传输使用替身。 |
 | `tests/integration/run-sales-live.test.ts` | 受控 HTTP + 真实文件验证脚本拒绝不完整中间产物；不是模型 E2E。 |
 | `tests/integration/host-assembly.test.ts` | 真实 Cordis 宿主装配，退役守卫撤销及新 child 权限仍有效。 |
 | `tests/contract/package-contract.test.ts` | 新版本与原发布包结构契约。 |
@@ -107,14 +121,16 @@ sequenceDiagram
 
 | 验证 | 实际结果 |
 | --- | --- |
-| `pnpm check` | PASS；四个 TypeScript Program、194 个测试文件 / 2242 项测试、Host/Client 构建及 Client smoke。 |
-| 恢复相关 V8 验证 | PASS；37 个文件 / 475 项测试。LCOV 与本次源码 diff 的可执行修改行交集覆盖 126/127（99.21%）；排除纯类型及非可执行模板行，这是修改行口径，不是全仓或分支覆盖率。 |
+| `pnpm check` | PASS；四个 TypeScript Program、194 个测试文件 / 2252 项测试、Host/Client 构建及 Client smoke。 |
+| 独立 `pnpm build` | PASS；同步生成的 `lib/orchestrator/runtime-execute.js`，其余构建文件无额外差异。 |
+| 执行/结算针对性回归 | PASS；19 个文件 / 256 项测试，其中真实 RuntimeExecute + NodeAgentRunner 集成文件共 11 项，新增 10 项。 |
+| 恢复相关 V8 验证 | PASS；29 个文件 / 435 项测试。本次补充逻辑的可执行修改行覆盖 5/5（100%）；整个 PR 相对 main 的可执行修改行交集覆盖 131/132（99.24%）。排除纯类型及非可执行模板行，这是修改行口径，不是全仓或分支覆盖率。 |
 | 官方 DSH `0.1.6-alpha.2` Scope smoke | PASS；`standingKeyFor()`，6 次实际 Preset 读取、15 次实际 Scope 工具执行、2 个公开恢复钩子检查。 |
 | 官方 DSH `0.2.0-rc.2` Scope smoke | PASS；`acquireScope()`，同上。受控 `compat-probe` Preset，不冒充真实模型或 shipped standard E2E。 |
-| npm tarball | PASS；`dsh-visual-workflow-0.10.1.tgz`，17,432,862 字节；版本、导出入口与全部 17 个修改的 lib 文件逐字节比对通过。 |
+| npm tarball | PASS；`dsh-visual-workflow-0.10.1.tgz`，17,433,051 字节；版本、导出入口与全部 17 个修改的 lib 文件逐字节比对通过。 |
 | 真实 Docker 五节点模型 E2E | **NOT RUN**；现场执行下节命令。 |
 
-本次已生成 tarball 的 SHA256：`ffdc05ab342b404209663b58ec261c4318ac87c5536d2962a85de899666e4e8d`。不同构建或 npm 打包版本可能生成不同 archive hash；现场仍需核对自己实际构建/安装的文件。全仓检查存在 Node.js SQLite 实验性提示及依赖 source map 警告，未导致检查失败。
+本次已生成 tarball 的 SHA256：`0cbed2fa5c044cc57f8d0c924f522e9254cfec94f76c691baf7717f402d23f47`。不同构建或 npm 打包版本可能生成不同 archive hash；现场仍需核对自己实际构建/安装的文件。全仓检查存在 Node.js SQLite 实验性提示及依赖 source map 警告，未导致检查失败。
 
 关键测试名称：
 
@@ -123,10 +139,16 @@ sequenceDiagram
 - `test_reuse_error_explicitly_accepted_does_not_rebuild_even_with_NOT_RESUMABLE`
 - `test_rebuild_creation_failure_preserves_cache_and_causes_without_loop`
 - `test_dispatch_concurrent_proxy_counts_one_attempt`
+- `test_dispatch_%s_unsettled_child_is_busy_without_consuming_budget`
+- `test_dispatch_%s_settlement_allows_cached_child_retry_within_budget`
+- `test_dispatch_%s_and_%s_share_startup_and_execution_mutex`
+- `test_dispatch_settlement_validation_pending_remains_busy_until_verified`
+- `test_dispatch_stopped_checkpoint_resumes_without_stale_busy_and_rejects_old_epoch`
+- `test_dispatch_paused_child_settles_and_checkpoint_retry_rebuilds_unrecoverable_child`
 - `test_creation_cancelled_after_host_returns_interrupts_new_child_and_keeps_old_cache`
 - `test_settlement_same_child_new_run_rejects_previous_host_epoch`
 - `test_settlement_cold_reuse_end_before_registration_is_buffered_for_current_epoch`
-- `test_settlement_rebuild_during_validation_discards_old_result`
+- `test_settlement_resume_during_validation_discards_old_result`
 - `test_inputs_authorized_unbound_attachment_does_not_infer_CSV`
 - `test_settlement_upload_request_without_artifact_fails_and_blocks_ctx`
 - `test_ctx_verified_artifact_paths_rechecked_before_dispatch_deleted_%s`

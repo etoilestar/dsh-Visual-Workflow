@@ -120,6 +120,7 @@ describe('wfRunNode 异步路径与护栏', () => {
     // a1 失败（stopReason=error）→ 无产出可注入
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
     await h.runtime.handleSubagentEnd({ id: 'child-2', stopReason: 'error', lastAssistantMessage: [] })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a2' })
     const second = h.runner.calls[2].blocks[0].text
     expect(second).not.toContain('子任务A')

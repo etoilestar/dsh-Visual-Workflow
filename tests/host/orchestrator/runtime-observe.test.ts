@@ -108,7 +108,8 @@ describe('subagent/end 观察回写（§8 #21）', () => {
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
     expect(entry.inflight.has('child-1')).toBe(true)
 
-    // 配置签名变化：第二次派发替换 child-1（引擎已尽力中断），编排器把旧 child 退役
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed" })
+    // 结算后配置签名变化：第二次派发替换 child-1，编排器把旧 child 退役。
     h.runner.nextReplacedChildId = 'child-1'
     await h.runtime.wfRunNode(caller, { nodeId: 'n-a1' })
     expect(entry.inflight.has('child-2')).toBe(true)
@@ -239,6 +240,7 @@ describe("子代理结算代际", () => {
     const h = await makeHarness()
     const { entry } = await start(h, makeFlow())
     await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "error" })
     await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
     expect(h.runtime.childMetaFor("child-2")).toMatchObject({ runId: entry.snapshot.id, attempt: 2 })
     await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "旧轮次" }] })
@@ -248,7 +250,7 @@ describe("子代理结算代际", () => {
     expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "ok", output: "当前轮次" })
   })
 
-  it("test_settlement_rebuild_during_validation_discards_old_result", async () => {
+  it("test_settlement_resume_during_validation_discards_old_result", async () => {
     const h = await makeHarness()
     const { entry } = await start(h, makeFlow())
     await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
@@ -257,14 +259,18 @@ describe("子代理结算代际", () => {
     const original = h.store.getWorkflow.bind(h.store)
     vi.spyOn(h.store, "getWorkflow").mockImplementationOnce(async (...args) => { await gate; return original(...args) })
     const oldEnd = h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "旧异步结果" }] })
+    await expect(h.runtime.wfRunNode(caller, { nodeId: "n-a1" })).rejects.toMatchObject({ code: "WF_BUSY" })
+    await h.runtime.stopRun(entry.snapshot.id)
+    await h.runtime.resumeRun({ sessionId: "session-1", flowId: "flow-1" })
     h.runner.nextReplacedChildId = "child-1"
     await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
     release()
     await oldEnd
     expect(h.runtime.childMetaFor("child-1")).toMatchObject({ retired: true })
     expect(h.runtime.runForChild("child-1")).toBeNull()
-    expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "running", childId: "child-2", attempts: 2, output: "" })
-    expect(entry.inflight.has("child-2")).toBe(true)
+    const current = h.runtime.activeRunForSession("session-1")!
+    expect(current.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "running", childId: "child-2", attempts: 1, output: "" })
+    expect(current.inflight.has("child-2")).toBe(true)
   })
 })
 
