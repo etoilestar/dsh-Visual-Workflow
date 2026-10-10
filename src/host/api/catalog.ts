@@ -4,7 +4,7 @@
 // 配置（托管区读写归 mcp 模块）与插件目录聚合（工具 ∪ MCP ∪ 已装载插件）。
 
 import { RESERVED_TRANSPORT_TOOL, TEAM_TOOL_NAMES } from '../shared/protocol.js'
-import { agentPresetsServiceOf, releasePresetLease } from '../agent/index.js'
+import { CordisToolsView } from "../agent/index.js"
 import { agentTeamsServiceLike } from '../team/index.js'
 import { listMcpServers, upsertMcpServer, removeMcpServer, toggleMcpServer, renderCommandLine } from '../mcp/registry.js'
 import { httpError } from './http.js'
@@ -144,29 +144,9 @@ export class CatalogEndpoints extends VisualWorkflowApiBase {
       }
       for (const agent of candidates) collect(agent)
     }
-    // preset standing scope：0.1.7-rc.1 起经 acquireScope 取租约（standingKeyFor 已移除），
-    // 读完必须释放——守卫条件与释放协议统一取自 agent 模块公共入口，避免两处漂移。
-    const agentPresets = agentPresetsServiceOf(this.ctx)
-    if (agentPresets) {
-      try {
-        for (const item of (await agentPresets.list()) ?? []) {
-          const pid = String((item as { id?: unknown })?.id ?? '').trim()
-          if (!pid) continue
-          try {
-            const lease = await agentPresets.acquireScope(pid)
-            try {
-              const key = (lease as { key?: unknown } | null | undefined)?.key
-              if (key !== undefined) collect(key)
-            } finally {
-              await releasePresetLease(lease)
-            }
-          } catch {
-            // 单个 preset 失败跳过
-          }
-        }
-      } catch {
-        // agentPresets 不可用
-      }
+    for (const schema of await new CordisToolsView(this.ctx).allPresetToolSchemas()) {
+      const name = String((schema as { name?: unknown; title?: unknown })?.name ?? (schema as { title?: unknown })?.title ?? "")
+      if (name && !out.has(name)) out.set(name, schema)
     }
     // 剔除官方保留的 Code Mode 传输名 run_code：组合管理可选列表不得展示
     // （子代理自动携带该工具，且官方 restrict 禁止其进入 allow/deny 名单）。

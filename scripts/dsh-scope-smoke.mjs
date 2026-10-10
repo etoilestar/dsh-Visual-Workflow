@@ -3,6 +3,10 @@
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 import { pathToFileURL } from "node:url"
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
+import { CordisToolsView, withPresetScope } from "../lib/agent/index.js"
 import { installChildToolPolicy } from "../lib/agent/child-tool-filter.js"
 import { createModelSelectionSetup } from "../lib/agent/model-selection.js"
 import { createChildPromptSetup } from "../lib/agent/prompt-setup.js"
@@ -17,6 +21,7 @@ const [{ Context }, { SystemPrompt }, { ToolRuntime }, { createScope }] = await 
 ])
 const root = new Context()
 const owned = []
+const presetDirectory = await mkdtemp(join(tmpdir(), "dsh-preset-compat-"))
 try {
   await root.plugin(SystemPrompt, { includeHarnessIdentity: false, includeRuntimeContext: false })
   await root.plugin(ToolRuntime, { mode: "native" })
@@ -25,6 +30,38 @@ try {
     output: { schema: { type: "null" }, render: () => [{ type: "text", text: "executed" }] },
     execute: async () => null,
   })
+  // Exercise the real public Registry and Loader with a controlled composition;
+  // this is an interface/permission smoke, not shipped-standard or model E2E.
+  const [{ Loader }, { SessionProjectionRegistry }] = await Promise.all([
+    runtimeImport("@deepseek-ai/cordis-plugin-loader"), runtimeImport("@deepseek-ai/dsh-session-projection"),
+  ])
+  let registryPackage
+  try {
+    requireRuntime.resolve("@deepseek-ai/dsh-agent-preset-registry")
+    registryPackage = "@deepseek-ai/dsh-agent-preset-registry"
+  } catch { registryPackage = "@deepseek-ai/dsh-agent-presets" }
+  const { COMPOSITION_FILE } = await runtimeImport(registryPackage)
+  await root.plugin(Loader, { baseUrl: pathToFileURL(manifest).href })
+  await root.plugin(SessionProjectionRegistry)
+  root.get("loader").builtins["compat-tools"] = { apply(context) {
+    for (const name of ["read", "write"]) context.get("tools").register(definition(name))
+  } }
+  await mkdir(join(presetDirectory, "compat-probe"))
+  await writeFile(join(presetDirectory, "compat-probe", COMPOSITION_FILE ?? "agent.cordis.yml"), JSON.stringify([{ name: "cordis:compat-tools" }]))
+  await root.get("loader").create({ name: registryPackage, config: {
+    default: "compat-probe", roots: [{ path: presetDirectory, trust: "system" }], includeShippedRoot: false, includeUserRoot: false,
+  } })
+  await root.get("loader").await()
+  const presets = root.get("agentPresets")
+  const unregister = typeof presets.register === "function" ? await presets.register({ id: "compat-probe", plugins: [{ name: "cordis:compat-tools" }] }) : undefined
+  const view = new CordisToolsView(root)
+  for (let i = 0; i < 5; i++) assert.deepEqual(await view.presetToolNames("compat-probe"), ["read", "write"])
+  const registryKey = await withPresetScope(presets, "compat-probe", (key) => key)
+  if (unregister) {
+    await unregister()
+    assert.deepEqual(root.get("tools").schemas(registryKey), [], "released leases must allow the retired composition to unmount")
+  }
+  const presetScopeApi = typeof presets.acquireScope === "function" ? "acquireScope" : "standingKeyFor"
   for (const name of ["read", "write", "mcp__server__read", "wf_finish"]) root.get("tools").register(definition(name))
   const presetKey = {}
   const preset = createScope(root, presetKey)
@@ -91,8 +128,9 @@ try {
   })
   assert.equal(publicRecoveryHooksPassed, 2)
   assert.equal(modelRouteUpdates, 2)
-  console.log(JSON.stringify({ status: "passed", runtime: "@deepseek-ai/dsh-tools", actualScopedExecutions: sequence, publicRecoveryHooksPassed, modelRouteUpdates }))
+  console.log(JSON.stringify({ status: "passed", runtimeVersion: requireRuntime("./package.json").version, runtime: "@deepseek-ai/dsh-tools", presetScopeApi, actualPresetReads: 6, actualScopedExecutions: sequence, publicRecoveryHooksPassed, modelRouteUpdates, modelE2E: "NOT RUN" }))
 } finally {
   for (const scope of owned.reverse()) await scope.dispose()
   await root.fiber.dispose()
+  await rm(presetDirectory, { recursive: true, force: true })
 }

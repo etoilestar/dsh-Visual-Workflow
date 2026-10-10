@@ -5,7 +5,8 @@
 //
 // MCP 用例经 DSH_HOME 指向临时目录（托管区落在 profile 的 cordis.patch.yml）。
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { CordisToolsView } from "../../../src/host/agent/index.js"
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ToolSwitchStore } from '../../../src/host/tools/infrastructure/tool-switches.js'
@@ -39,6 +40,37 @@ describe('组合端点', () => {
     expect(list).toHaveLength(1)
     const deleted = await h.api.handle('toolComboDelete', { id: 'combo-1' })
     expect(deleted).toEqual({ deleted: true })
+  })
+})
+
+describe("Preset tools in GUI catalog", () => {
+  it.each(["standingKeyFor", "acquireScope"] as const)("test_catalog_%s_matches_execution_tool_view", async (method) => {
+    const h = await makeHarness()
+    const key = {}
+    const dispose = vi.fn()
+    const asyncDispose = (Symbol as unknown as { asyncDispose: symbol }).asyncDispose
+    h.ctx.services.set("tools", { schemas: (scope?: unknown) => (scope === key ? ["read", "write"] : ["global_only"]).map((name) => ({ name })) })
+    h.ctx.services.set("agentPresets", { list: async () => [{ id: "standard" }], [method]: async () => method === "standingKeyFor" ? key : { key, [asyncDispose]: dispose } })
+    const catalog = await h.api.handle("pluginCatalog", {}) as { items: Array<{ name: string }> }
+    expect(catalog.items.map((item) => item.name)).toEqual(["global_only", "read", "write"])
+    expect(await new CordisToolsView(h.ctx).presetToolNames("standard")).toEqual(["read", "write"])
+    expect(dispose).toHaveBeenCalledTimes(method === "acquireScope" ? 2 : 0)
+  })
+
+  it("test_catalog_preset_failure_logs_and_continues_without_authorizing_execution", async () => {
+    const h = await makeHarness()
+    const key = {}
+    const warn = vi.fn()
+    Object.assign(h.ctx, { logger: { warn } })
+    h.ctx.services.set("tools", { schemas: (scope?: unknown) => (scope === key ? ["read"] : ["global_only"]).map((name) => ({ name })) })
+    h.ctx.services.set("agentPresets", { list: async () => [{ id: "broken" }, { id: "standard" }], standingKeyFor: async (id: string) => {
+      if (id === "broken") throw new TypeError("broken preset scope")
+      return key
+    } })
+    const catalog = await h.api.handle("pluginCatalog", {}) as { items: Array<{ name: string }> }
+    expect(catalog.items.map((item) => item.name)).toEqual(["global_only", "read"])
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({ presetId: "broken", stage: "preset_scope_acquire_failed", errorType: "TypeError", reason: "broken preset scope" })
+    await expect(new CordisToolsView(h.ctx).presetToolNames("broken")).rejects.toMatchObject({ code: "WF_CHILD_TOOL_POLICY_FAILED", presetStage: "preset_scope_acquire_failed" })
   })
 })
 

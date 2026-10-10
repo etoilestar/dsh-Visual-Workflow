@@ -45,6 +45,7 @@ export interface GroupMemberToolsInput {
   toolsView: ToolsView
   sessionId: string
   flowId: string
+  runId?: string
   node: RoleNode
   disabledTools?: ReadonlySet<string>
   mode?: 'mode1' | 'mode2'
@@ -142,6 +143,7 @@ export class TeamGroupRunner {
         toolsView: this.deps.toolsView,
         sessionId: input.sessionId,
         flowId: input.flowId,
+        runId: input.runId,
         node,
         ...(disabledTools ? { disabledTools } : {}),
         ...(input.mode ? { mode: input.mode } : {}),

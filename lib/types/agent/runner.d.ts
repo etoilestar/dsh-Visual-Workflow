@@ -1,4 +1,3 @@
-import type { Context } from '@deepseek-ai/cordis';
 import type { FlowStore } from '../storage/flow-store.js';
 import type { GraphNode, RoleNode } from '../shared/graph-model.js';
 import type { NodeRunner, NodeStartInput, OrchestratorLogger, GroupStartInput, GroupStartResult } from '../orchestrator/index.js';
@@ -93,39 +92,36 @@ export interface SubagentsServiceLike {
 /** agentPresets 服务最小结构（官方 preset standing scope 解析）。 */
 export interface AgentPresetsServiceLike {
     list(): Promise<unknown[]>;
-    /**
-     * 取得某 preset 当前 revision 的 standing scope 租约（`{ key: ScopeKey }`）。
-     *
-     * 【0.1.7-rc.1 取证】官方 0.1.5-rc.3 的 `standingKeyFor(id)` 已被移除
-     * （dsh-agent-preset-registry/lib/types/index.d.ts L123-125 只保留 `acquireScope`；
-     * 全官方包 grep `standingKeyFor` 零命中）。返回值为**引用租约**
-     * （`{ key: ScopeKey } & AsyncDisposable`），读完后必须经 `Symbol.asyncDispose`
-     * 释放——实现是 `users--` 并触发 generation 回收（同包 lib/index.js L787-799），
-     * 不释放会让 preset standing scope 常驻不回收。官方同源范式见
-     * dsh-api-session-controller 的 `scopeFor(agentPreset)`。
-     */
-    acquireScope(id?: string): Promise<{
+    /** 新接口返回引用租约，读取后必须释放；运行时校验其 key。 */
+    acquireScope?(id?: string): Promise<{
         key: unknown;
     } & object>;
+    /** 旧接口直接返回 ScopeKey，不拥有可释放租约。 */
+    standingKeyFor?(id?: string): Promise<unknown>;
+}
+interface PresetDiagnosticContext {
+    runId?: string;
+    nodeId?: string;
 }
 /**
- * 释放 preset standing scope 租约（best-effort，幂等）。
- * 协议缺失或释放抛错都只跳过释放：清单读取属辅助路径，不得因回收失败而失败。
+ * 释放 preset standing scope 租约（best-effort；调用方负责只释放一次）。
+ * 回收失败记录诊断但不替代读取结果；不能据此改变已经解析的权限。
  */
-export declare function releasePresetLease(lease: unknown): Promise<void>;
+export declare function releasePresetLease(lease: unknown, onFailure?: (error: unknown) => void): Promise<void>;
 /**
- * 解析官方 agentPresets 服务（能力守卫的**单一来源**：GUI 目录端点与节点工具白名单
- * 解析共用；缺失或不支持 standing scope 取用时返回 null，由调用方决定降级语义）。
+ * 按公开能力识别 Preset 服务；缺失返回 null，不兼容的已注册服务明确报错。
  */
 export declare function agentPresetsServiceOf(ctx: {
     get(name: string): unknown;
-}): AgentPresetsServiceLike | null;
+}, presetId?: string): AgentPresetsServiceLike | null;
+/** 使用真实 Preset Scope 完成读取；新版优先且失败不回退，旧版不执行租约释放。 */
+export declare function withPresetScope<T>(presets: AgentPresetsServiceLike, presetId: string, read: (scopeKey: object) => Promise<T> | T, onReleaseFailure?: (error: unknown) => void): Promise<T>;
 /** 工具视图缝（白名单解析依赖；CordisToolsView 为真实实现，单测 fake）。 */
 export interface ToolsView {
     /** 全部可见工具名（全局层 ∪ 存活 agent scope ∪ preset standing scope）。 */
     visibleToolNames(sessionId?: string): Promise<string[]>;
-    /** 官方 preset 的 standing scope 工具名；服务缺失返回 null（调用方回退）。 */
-    presetToolNames(presetId: string): Promise<string[] | null>;
+    /** 官方 preset 工具名；解析失败必须拒绝启动，不扩大授权。 */
+    presetToolNames(presetId: string, diagnostic?: PresetDiagnosticContext): Promise<string[] | null>;
     /** 当前会话父代理工具视图，仅供枚举；创建权限必须由实际 child scope 裁决。 */
     agentToolNames(sessionId?: string): Promise<string[]>;
 }
@@ -137,12 +133,21 @@ export interface ToolsView {
  */
 export declare class CordisToolsView implements ToolsView {
     private readonly ctx;
-    constructor(ctx: Context);
+    constructor(ctx: {
+        get(name: string): unknown;
+        logger?: {
+            warn(message: string): unknown;
+        };
+    });
     private toolsService;
     private agentsService;
-    private agentPresetsService;
+    private logPresetFailure;
+    /** 目录枚举允许跳过单个失败预设；与节点执行共用 Scope 获取和 schema 校验。 */
+    allPresetToolSchemas(): Promise<unknown[]>;
+    /** 节点执行与目录使用相同的读取规则；失败携带稳定权限错误码和细分诊断。 */
+    presetToolSchemas(presetId: string, diagnostic?: PresetDiagnosticContext): Promise<unknown[]>;
     visibleToolNames(sessionId?: string): Promise<string[]>;
-    presetToolNames(presetId: string): Promise<string[] | null>;
+    presetToolNames(presetId: string, diagnostic?: PresetDiagnosticContext): Promise<string[]>;
     agentToolNames(sessionId?: string): Promise<string[]>;
 }
 /** 白名单解析入参。 */
@@ -151,6 +156,7 @@ export interface ResolveToolsInput {
     toolsView: ToolsView;
     sessionId: string;
     flowId: string;
+    runId?: string;
     /** 已解析为主节点的角色节点（虚拟节点在 T-021 已解析）。 */
     node: RoleNode;
     /**
@@ -311,3 +317,4 @@ export declare class NodeAgentRunner implements NodeRunner {
  * 三常驻工具的 deny），两者都失败即跳过——白名单 allow 仍兜底。
  */
 export declare function childVisibilityContribution(): (childCtx: unknown) => () => void;
+export {};
