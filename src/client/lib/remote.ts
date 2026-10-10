@@ -25,6 +25,7 @@ export const POLL_REMOTE_TIMEOUT_MS = 8_000
 /** 携带稳定错误码的远端错误（code 可判定，调用方按语义分支）。 */
 export interface RemoteError extends Error {
   code?: string
+  details?: Array<{ field: string; message: string }>
 }
 
 /**
@@ -89,16 +90,19 @@ function transportFailure(error: unknown, endpoint: string, deadline: Deadline):
 async function errorFromResponse(response: Response): Promise<RemoteError> {
   let message = `工作流服务错误（HTTP ${response.status}）`
   let code: string | undefined
+  let details: RemoteError["details"]
   try {
-    const payload = (await response.json()) as { error?: { message?: unknown; code?: unknown } }
+    const payload = (await response.json()) as { error?: { message?: unknown; code?: unknown; details?: RemoteError["details"] } }
     if (payload?.error?.message) message = String(payload.error.message)
     const rawCode = payload?.error?.code
     if (typeof rawCode === 'string' && rawCode) code = rawCode
+    if (Array.isArray(payload.error?.details)) details = payload.error.details
   } catch {
     // 非 JSON 响应：保留兜底文案
   }
   const error = new Error(message) as RemoteError
   if (code) error.code = code
+  if (details) error.details = details
   return error
 }
 
@@ -122,7 +126,7 @@ export async function remoteCall(
       throw transportFailure(error, endpoint, deadline)
     }
     if (!response.ok) throw await errorFromResponse(response)
-    let payload: { ok?: unknown; value?: unknown; error?: { message?: unknown; code?: unknown } } = {}
+    let payload: { ok?: unknown; value?: unknown; error?: { message?: unknown; code?: unknown; details?: RemoteError["details"] } } = {}
     try {
       payload = (await response.json()) as typeof payload
     } catch {
@@ -134,6 +138,7 @@ export async function remoteCall(
       const error = new Error(String(payload?.error?.message ?? `工作流服务错误（HTTP ${response.status}）`)) as RemoteError
       const code = payload?.error?.code
       if (typeof code === 'string' && code) error.code = code
+      if (Array.isArray(payload.error?.details)) error.details = payload.error.details
       throw error
     }
     return payload.value

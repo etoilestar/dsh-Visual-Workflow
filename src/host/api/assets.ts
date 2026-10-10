@@ -6,6 +6,7 @@
 
 import { ERR_ASSET_BAD_ARGS, ERR_ASSET_NOT_FOUND } from '../shared/protocol.js'
 import { contentFingerprint } from '../assets/index.js'
+import { runtimeDefinitionOf } from "../graph/index.js"
 import type { AssetKind, AssetVersionEntry, RoleAssetDetail, RoleAssetReference, RoleAssetSummary, WorkflowAssetDetail, WorkflowAssetSummary } from '../shared/asset-types.js'
 import type { RoleTemplate } from '../shared/template-types.js'
 import type { GraphNode, Line } from '../shared/graph-model.js'
@@ -31,6 +32,11 @@ type WorkflowSaveInput = Parameters<Assets['saveWorkflowVersion']>[0]
  */
 function assetBadArgs(message: string): Error {
   return httpError(400, message, ERR_ASSET_BAD_ARGS)
+}
+
+function assetRuntimeOf(raw: unknown) {
+  try { return runtimeDefinitionOf(raw) }
+  catch (error) { throw assetBadArgs(error instanceof Error ? error.message : "runtime 无效") }
 }
 
 /** 取必填字符串字段（形状非法即 400；返回窄化后的值供直接构造领域入参）。 */
@@ -186,6 +192,7 @@ export class AssetEndpoints extends VisualWorkflowApiBase {
     const input: WorkflowPromoteInput = {
       templateId,
       fingerprint: contentFingerprint(template),
+      ...(template.runtime ? { runtime: template.runtime } : {}),
       mode: template.mode,
       name: template.name,
       description: template.description,
@@ -219,6 +226,7 @@ export class AssetEndpoints extends VisualWorkflowApiBase {
       nodes,
       lines: payload.lines as Line[],
       ...(payload.meta === undefined ? {} : { meta: payload.meta as OrgMeta }),
+      ...(payload.runtime === undefined ? {} : { runtime: assetRuntimeOf(payload.runtime) }),
       source: 'human',
     }
     return assets.saveWorkflowVersion(input)

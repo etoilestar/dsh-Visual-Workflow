@@ -45,6 +45,7 @@ interface AssetStoreLike {
         source: 'human' | 'agent';
     }): Promise<PromoteResult>;
     promoteWorkflow(input: {
+        runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition;
         templateId: string;
         fingerprint: string;
         mode: WorkflowMode;
@@ -61,6 +62,7 @@ interface AssetStoreLike {
         source: 'human' | 'agent';
     }): Promise<PromoteResult>;
     saveWorkflowVersion(input: {
+        runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition;
         assetId: string;
         mode: WorkflowMode;
         name: string;

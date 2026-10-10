@@ -50,7 +50,9 @@ export async function sweepWatchdogOnce(runtime: OrchestratorRuntime): Promise<v
       await runtime.failRunForParentError(entry, terminal.error)
       continue
     }
-    if (runtime.executionTimeoutMs > 0 && now - Date.parse(snapshot.startedAt) >= runtime.executionTimeoutMs) {
+    const timeout = snapshot.budget?.executionTimeoutMs ?? runtime.executionTimeoutMs
+    if (timeout > 0 && now - Date.parse(snapshot.startedAt) >= timeout) {
+      runtime.cancelParentForBudget(entry)
       await runtime.terminateRun(entry, {
         status: "stopped", summary: "工作流达到执行时限，已停止；请检查父/子代理是否卡住或无法收敛",
         abortReason: "execution-timeout",
@@ -58,13 +60,15 @@ export async function sweepWatchdogOnce(runtime: OrchestratorRuntime): Promise<v
       })
       continue
     }
+    try { await runtime.enforceRuntimeBudget(entry) } catch { continue }
     // 官方 Agent.status=running 涵盖模型请求、工具调用和压缩；不以 wf_* 静默判断它空闲。
     if (runtime.parentRunning(entry)) entry.lastActiveAt = now
 
     // 自愈：清掉已结束/已消失的 in-flight 子代理（流产物已结束但 subagent/end 未观测到时按结束计）
     if (entry.inflight.size > 0) {
       for (const childId of [...entry.inflight]) {
-        if (!runtime.childRunning(childId)) {
+        const meta = runtime.childMetaFor(childId)
+        if (!runtime.childRunning(childId) && (!meta || meta.retired || meta.runId !== snapshot.id)) {
           entry.inflight.delete(childId)
           entry.lastActiveAt = now
         }

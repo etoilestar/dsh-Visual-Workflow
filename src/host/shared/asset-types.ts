@@ -14,6 +14,7 @@
 
 import type { GraphNode, Line, WorkflowMode } from './graph-model.js'
 import type { OrgMeta } from './org-meta.js'
+import type { WorkflowRuntimeDefinition } from "./runtime-types.js"
 
 /** 资产种类：工作流资产 / 角色资产（V1 只此两类）。 */
 export type AssetKind = 'workflow' | 'role'
@@ -159,6 +160,7 @@ export interface RoleAssetDetail {
 
 /** 工作流资产详情（Active 版本；nodes 已按固定版本把角色节点字段 join 回填）。 */
 export interface WorkflowAssetDetail {
+  runtime?: WorkflowRuntimeDefinition
   assetId: string
   versionId: number
   rowId: string

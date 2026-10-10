@@ -57,6 +57,8 @@ sequenceDiagram
 
 ## 现场输入配置
 
+本节描述原有销售测试的 file-node/explicit 配置。PR #9 增加了通用 RuntimeInputs 和可选自动交接：普通角色可以直接绑定运行输入，不必增加 File Node 或 ctx；静态契约、授权、迁移、工作台操作和两种现场验收命令见 [runtime-inputs.md](runtime-inputs.md)。未启用新策略的旧工作流继续使用下述语义。
+
 没有声明文件输入要求、也没有连接文件输入节点的普通节点，不会被强制检查 CSV。本修复不会把销售测试的输入约束应用到所有角色节点；自由文本 schema 保持原有兼容行为。
 
 销售分析验收必须显式配置以下内容：

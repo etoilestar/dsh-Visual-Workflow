@@ -5,6 +5,20 @@ import type { AgentHost, NodeRunner, OrchestratorConfig, OrchestratorLogger, Par
 import type { PendingAsk } from './ask-protocol.js';
 /** 单次运行的内存条目（旧项目 entry 同构：快照 + 护栏计数 + in-flight 表）。 */
 export interface RunEntry {
+    inputBinding?: boolean;
+    inputBindingDone?: Promise<void>;
+    parentSettlementDone?: Promise<void>;
+    repeatedFailure?: {
+        key: string;
+        count: number;
+    };
+    tokenBase?: number;
+    tokenMeters?: Map<string, {
+        total: number;
+        complete: boolean;
+        observed: boolean;
+    }>;
+    terminationDone?: Promise<boolean>;
     /** 运行级取消控制器（停止/终止/插件卸载时 abort；阻塞中的 wait/提问随之取消）。 */
     controller: AbortController;
     /** 运行快照（状态机事实源；持久化副本经 store.saveRun）。 */
@@ -49,6 +63,7 @@ export interface Waiter {
 export declare function createWaiter(): Waiter;
 /** wf_run_node 入参（工具参数经 schema 校验后传入；未知字段宽松处理）。 */
 export interface RunNodeArgs {
+    selectedEdgeIds?: unknown;
     nodeId?: unknown;
     wait?: unknown;
     thinking?: unknown;
@@ -101,6 +116,7 @@ export interface OrchestratorDeps {
     workingDirectory?: (sessionId: string) => Promise<string | undefined>;
     /** 官方会话已接纳的附件路径；调用方不能通过 fileBindings 授予宿主文件权限。 */
     authorizedInputFiles?: (sessionId: string) => Promise<readonly string[]>;
+    sessionInputFiles?: (sessionId: string) => Promise<readonly import("../shared/runtime-types.js").SessionInputFile[]>;
     /** 配置子集。 */
     config: OrchestratorConfig;
     /**
@@ -144,6 +160,8 @@ export interface MilestoneMarkResult {
     milestoneUsed: number;
 }
 export interface StartRunOptions {
+    runtimeInputs?: unknown;
+    handoffPolicy?: unknown;
     /** 文件节点 id → 实际输入路径数组；由运行边界校验未知 JSON。 */
     fileBindings?: unknown;
     /** 运行模式（缺省 mode1；模式二由服务管理器传入 mode2）。 */

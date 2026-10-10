@@ -49,6 +49,13 @@ const ERROR_STATUS: Record<string, number> = {
   WF_SERVICE_BAD_ID: 400,
   WF_FLOW_INVALID: 422,
   WF_BAD_FILE_BINDINGS: 400,
+  WF_BAD_ARGS: 400,
+  WF_NOT_FOUND: 404,
+  WF_BUSY: 409,
+  WF_INPUT_REVISION_CONFLICT: 409,
+  WF_INPUT_STATE_CONFLICT: 409,
+  WF_RUNTIME_INPUT_INVALID: 422,
+  WF_INPUT_REQUIRED: 422,
   WF_EXECUTION_CONTRACT_INVALID: 422,
   WF_INPUT_FILE_UNBOUND: 422,
   WF_INPUT_FILE_UNAVAILABLE: 422,
@@ -122,7 +129,9 @@ export function registerRoutes(
         // message，Bug 20）。
         const code = String((error as { code?: unknown })?.code ?? '')
         const message = error instanceof Error ? error.message : String(error)
-        sendJson(res as never, statusOf(error), { ok: false, error: { message, ...(code ? { code } : {}) } })
+        const rawDetails = (error as { details?: unknown })?.details
+        const details = Array.isArray(rawDetails) ? rawDetails.filter((item) => item && typeof item.field === "string" && typeof item.message === "string").slice(0, 128).map((item: { field: string; message: string }) => ({ field: item.field, message: item.message })) : undefined
+        sendJson(res as never, statusOf(error), { ok: false, error: { message, ...(code ? { code } : {}), ...(details ? { details } : {}) } })
       }
     },
   })

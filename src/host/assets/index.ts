@@ -23,8 +23,9 @@ import type {
 import type { GraphNode, Line, WorkflowMode } from '../shared/graph-model.js'
 import type { OrgMeta } from '../shared/org-meta.js'
 import type { RoleTemplate } from '../shared/template-types.js'
+import { runtimeDefinitionOf } from "../graph/index.js"
 import { AssetDb } from './db.js'
-import { assetNotFound, AssetError } from './errors.js'
+import { assetNotFound, assetBadArgs, AssetError } from './errors.js'
 import {
   insertExperienceDrafts,
   listExperienceIndexRows,
@@ -82,6 +83,11 @@ export {
 } from './ids.js'
 export { ASSET_DB_FILE } from './schema.js'
 
+function validatedRuntime(raw: WorkflowPromoteInput["runtime"]): WorkflowPromoteInput["runtime"] {
+  try { return runtimeDefinitionOf(raw) }
+  catch (error) { throw assetBadArgs(error instanceof Error ? error.message : "runtime 无效") }
+}
+
 /** AssetStore 依赖：时钟与 id 生成（测试可确定化；缺省用系统实现）。 */
 export interface AssetStoreDeps {
   /** 当前时间毫秒（缺省 Date.now）。 */
@@ -100,6 +106,7 @@ export interface RolePromoteInput {
 
 /** 工作流模版晋升入参。 */
 export interface WorkflowPromoteInput {
+  runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition
   templateId: string
   fingerprint: string
   mode: WorkflowMode
@@ -120,6 +127,7 @@ export interface RoleSaveInput {
 
 /** 工作流资产态保存入参。 */
 export interface WorkflowSaveInput {
+  runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition
   assetId: string
   mode: WorkflowMode
   name: string
@@ -347,6 +355,7 @@ export class AssetStore {
         nodes: input.nodes,
         lines: input.lines,
         meta: input.meta ?? null,
+        runtime: validatedRuntime(input.runtime),
         source: input.source,
         sourceTemplateId: input.templateId,
         fingerprint: input.fingerprint,
@@ -389,6 +398,7 @@ export class AssetStore {
         nodes: input.nodes,
         lines: input.lines,
         meta: input.meta ?? null,
+        runtime: validatedRuntime(input.runtime),
         source: input.source,
         sourceTemplateId: binding.sourceTemplateId,
         fingerprint: binding.sourceFingerprint,

@@ -146,6 +146,7 @@ function workflowAssetPayload(state: StudioState, detail: WorkflowAssetDetail): 
     nodes: serialized.nodes,
     lines: serialized.lines,
     ...(detail.meta ? { meta: detail.meta } : {}),
+    ...(detail.runtime ? { runtime: structuredClone(detail.runtime) } : {}),
   }
 }
 

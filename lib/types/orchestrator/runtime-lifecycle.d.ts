@@ -8,6 +8,7 @@ export declare class RuntimeLifecycle extends RuntimeObserve {
      * 防止长期运行内存膨胀；running/paused 条目保留（续跑/锁查询需要）。
      */
     terminateRun(entry: RunEntry, options: TerminateOptions): Promise<boolean>;
+    private finishTermination;
     /** 用户停止运行（控制栏停止按钮；幂等）。 */
     stopRun(runId: string): Promise<void>;
     /**

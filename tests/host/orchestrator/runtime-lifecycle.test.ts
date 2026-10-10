@@ -19,8 +19,10 @@ describe('terminate / stop / dispose', () => {
     expect(entry.snapshot.status).toBe('stopped')
     expect(entry.snapshot.summary).toBe('运行已停止')
     expect(entry.snapshot.nodes.find((n) => n.nodeId === 'n-a1')!.status).toBe('fail')
+    expect(entry.snapshot.nodes.find((n) => n.nodeId === 'n-a1')!.result).toMatchObject({ status: "cancelled", confirmation: "unverified", outputs: {}, artifacts: [], runId: "run-1", attempt: 1, childId: "child-1" })
     expect(entry.snapshot.nodes.find((n) => n.nodeId === 'n-start')!.status).toBe('skipped')
     expect(h.runner.interrupts).toEqual([{ childId: 'child-1', sessionId: 'session-1' }])
+    expect(h.agents.cancellations).toEqual([{ sessionId: "session-1", reason: "WF_CANCELLED" }])
     expect(h.runtime.flowLockInfo('flow-1')).toBeNull()
     expect((await h.store.getRun('run-1'))?.status).toBe('stopped')
   })
@@ -74,4 +76,29 @@ describe('terminate / stop / dispose', () => {
     expect(h.runtime.runs.size).toBe(0)
     expect(h.runtime.childMetaFor('child-1')).toBeNull()
   })
+})
+
+it("test_failed_parent_finish_interrupts_child_and_rejects_late_settlement", async () => {
+  const h = await makeHarness()
+  const { entry } = await start(h, makeFlow())
+  await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+  await h.runtime.wfFinish(caller, { status: "failed", summary: "abort" })
+  expect(h.runner.interrupts).toEqual([{ childId: "child-1", sessionId: "session-1" }])
+  expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "fail", result: { status: "failed", outputs: {}, artifacts: [] } })
+  expect(h.runtime.flowLockInfo("flow-1")).toBeNull()
+  expect(entry.controller.signal.aborted).toBe(true)
+  expect(entry.inflight.size).toBe(0)
+  await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "late" }] })
+  expect((await h.store.getRun("run-1"))?.nodes.find((node) => node.nodeId === "n-a1")?.result?.status).toBe("failed")
+})
+
+it("test_stop_child_end_during_interrupt_cannot_publish_success", async () => {
+  const h = await makeHarness()
+  const { entry } = await start(h, makeFlow())
+  await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+  h.runner.interruptChild = async () => {
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "late success" }] })
+  }
+  await h.runtime.stopRun(entry.snapshot.id)
+  expect((await h.store.getRun(entry.snapshot.id))?.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "fail", result: { status: "cancelled", outputs: {}, artifacts: [] } })
 })

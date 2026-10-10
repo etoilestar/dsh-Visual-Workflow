@@ -12,6 +12,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ASSET_DB_FILE, AssetStore } from '../../../src/host/assets/index.js'
 import { fakeClock, fakeIds, makeStore, removeTempRoot, roleTemplate } from './fixtures/asset-fixture.js'
 
+// Frozen pre-PR #9 shape: no runtime_json column.
+const LEGACY_WORKFLOW_HISTORY_DDL = `CREATE TABLE workflow_asset_history (
+  id TEXT PRIMARY KEY, version_id INTEGER NOT NULL, asset_id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('mode1','mode2')), name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '', role_version_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(role_version_ids)),
+  nodes_json TEXT NOT NULL CHECK (json_valid(nodes_json)), lines_json TEXT NOT NULL CHECK (json_valid(lines_json)),
+  meta_json TEXT CHECK (meta_json IS NULL OR json_valid(meta_json)), retrieval_context TEXT,
+  source TEXT NOT NULL CHECK (source IN ('human','agent')), source_run_id TEXT, source_template_id TEXT,
+  source_fingerprint TEXT, created_at INTEGER NOT NULL, UNIQUE(asset_id, version_id)
+)`
+
 /**
  * 迁移前的历史表形状（冻结副本：迁移用例必须固定旧形状，不能跟着 src 漂移，
  * 否则「旧库能否升级」这条契约会随源码改动自动变成恒真）。
@@ -137,6 +148,25 @@ async function makeLegacyExperienceStore(): Promise<string> {
 
 let store: AssetStore
 let root: string
+
+it("test_legacy_workflow_history_migration_is_additive_and_preserves_version", async () => {
+  store.close()
+  const { DatabaseSync } = await import("node:sqlite")
+  const db = new DatabaseSync(join(root, ASSET_DB_FILE))
+  db.exec("DROP TABLE workflow_asset_active")
+  db.exec("DROP TABLE workflow_asset_history")
+  db.exec(LEGACY_WORKFLOW_HISTORY_DDL)
+  db.exec(`INSERT INTO workflow_asset_history (id,version_id,asset_id,mode,name,nodes_json,lines_json,source,created_at)
+    VALUES ('flow-legacy@1',1,'flow-legacy','mode1','legacy','[]','[]','human',1000)`)
+  db.close()
+  store = new AssetStore(root)
+  await store.init()
+  await store.init()
+  const detail = await store.rollbackWorkflowAsset("flow-legacy", 1)
+  expect(detail).toMatchObject({ rowId: "flow-legacy@1", versionId: 1, name: "legacy", createdAt: 1000, nodes: [], lines: [] })
+  expect(detail.runtime).toBeUndefined()
+  expect(await store.listWorkflowVersions("flow-legacy")).toHaveLength(1)
+})
 
 beforeEach(async () => {
   const created = await makeStore()

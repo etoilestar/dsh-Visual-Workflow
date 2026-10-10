@@ -19,6 +19,11 @@ afterEach(() => {
 })
 
 describe('remoteCall', () => {
+  it.each([400, 200])("test_tool_schema_error_details_survive_http_%s", async (status) => {
+    const error = { message: "bad input", code: "WF_BAD_ARGS", details: [{ field: "nodeId", message: "required" }] }
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: false, error }), { status })))
+    await expect(remoteCall(EP.EP_RUN)).rejects.toMatchObject(error)
+  })
   it('成功：返回 payload.value', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, value: { id: 'x' } }), {
       status: 200,

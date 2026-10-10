@@ -92,6 +92,8 @@ export declare const EP_RUN_STOP = "runStop";
 export declare const EP_RUN_HISTORY = "runHistory";
 /** 断点续跑端点名。 */
 export declare const EP_RUN_RESUME = "runResume";
+export declare const EP_RUNTIME_INPUT_OPTIONS = "runtimeInputOptions";
+export declare const EP_RUN_INPUT_BIND = "runInputBind";
 /** 数据库连接测试端点名。 */
 export declare const EP_DB_TEST = "dbTest";
 /** 数据库表结构端点名。 */

@@ -120,6 +120,8 @@ export const EP_RUN_STOP = 'runStop'
 export const EP_RUN_HISTORY = 'runHistory'
 /** 断点续跑端点名。 */
 export const EP_RUN_RESUME = 'runResume'
+export const EP_RUNTIME_INPUT_OPTIONS = "runtimeInputOptions"
+export const EP_RUN_INPUT_BIND = "runInputBind"
 
 /** 数据库连接测试端点名。 */
 export const EP_DB_TEST = 'dbTest'

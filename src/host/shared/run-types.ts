@@ -1,3 +1,5 @@
+import type { RuntimeInputs, HandoffPolicy, RuntimeEvent, RuntimeBudget, VerifiedArtifact, NodeResult, NodeInvocation } from "./runtime-types.js"
+import type { NodeExecutionContract } from "./graph-model.js"
 // Host + Client 共享契约：run 运行快照（纯类型，零运行时依赖）。
 //
 // 职责：定义一次 run 的持久化状态形状（runs/<runId>.json）与节点执行记录及其
@@ -38,6 +40,13 @@ export type NodeRunStatus =
  * 自旧 run 并标记来源，经 resumedFromRunId 追溯继承链（需求文档 §4.7 规则 2）。
  */
 export interface RunSnapshot {
+  runtimeInputs?: RuntimeInputs
+  inputRevision?: number
+  handoffPolicy?: HandoffPolicy
+  runtimeEvents?: RuntimeEvent[]
+  budget?: RuntimeBudget
+  usage?: { parentCalls: number; nodeExecutions: number; tokens: number; tokenAccounting: "available" | "unavailable" }
+  parentFailures?: RunFailure[]
   /** run 稳定标识（runId）。 */
   id: string
   /** 关联工作流 id（flowId）。 */
@@ -106,7 +115,10 @@ export interface RunSnapshot {
     model?: string
     failure?: RunFailure
     attemptHistory?: NodeAttempt[]
-    artifacts?: Array<{ path: string; size: number; verifiedAt: string }>
+    artifacts?: VerifiedArtifact[]
+    result?: NodeResult
+    invocation?: NodeInvocation
+    executionContract?: NodeExecutionContract
     /** 回合明细（可续跑节点每次被唤醒执行为一回合；P0-2）。 */
     turns?: Array<{
       /** 回合开始时间。 */
@@ -151,6 +163,8 @@ export interface NodeOutputRecord {
 
 
 export interface RunFailure {
+  nodeId?: string
+  attempt?: number
   phase: "tool_policy" | "node_input" | "child_start" | "child_execute" | "parent_execute" | "run_finish"
   code: string
   message: string
@@ -159,6 +173,7 @@ export interface RunFailure {
 }
 
 export interface NodeAttempt {
+  inputRevision?: number
   attempt: number
   phase: "child_start" | "child_execute" | "settled"
   startedAt: string

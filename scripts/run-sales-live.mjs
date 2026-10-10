@@ -11,6 +11,9 @@ if (process.argv.includes("--help")) {
 Required: DSH_BASE_URL, DSH_TEST_PROVIDER, DSH_TEST_MODEL (exact DSH routing identifiers).
 Optional: DSH_WEB_LOG (local DSH web log used for authentication; never printed),
 DSH_TEST_WORKSPACE (fresh host-visible directory), SALES_CSV, DSH_TEST_TIMEOUT_MS.
+DSH_TEST_INPUT_MODE=file-node|runtime (default file-node),
+DSH_TEST_HANDOFF_POLICY=explicit|auto|strict (default explicit).
+runtime mode uses typed authorized inputs and named artifacts without File Node or ctx lines.
 --prepare-only creates a test session and workflow without starting any model run;
 only DSH_BASE_URL is required in this mode. --help has no side effects.
 This script checks real child IDs, node settlement, artifacts and report contents.
@@ -23,6 +26,10 @@ assert.ok(["http:", "https:"].includes(new URL(origin).protocol), "DSH_BASE_URL 
 const provider = process.env.DSH_TEST_PROVIDER
 const model = process.env.DSH_TEST_MODEL
 const prepareOnly = process.argv.includes("--prepare-only")
+const inputMode = process.env.DSH_TEST_INPUT_MODE ?? "file-node"
+const handoffPolicy = process.env.DSH_TEST_HANDOFF_POLICY ?? "explicit"
+assert.ok(["file-node", "runtime"].includes(inputMode), "DSH_TEST_INPUT_MODE must be file-node or runtime")
+assert.ok(["explicit", "auto", "strict"].includes(handoffPolicy), "DSH_TEST_HANDOFF_POLICY must be explicit, auto or strict")
 assert.ok(prepareOnly || (provider && model), "Set DSH_TEST_PROVIDER and DSH_TEST_MODEL to configured DSH routing names; credentials remain in DSH settings")
 const timeoutMs = Number(process.env.DSH_TEST_TIMEOUT_MS ?? 600000)
 assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, "DSH_TEST_TIMEOUT_MS must be positive")
@@ -52,7 +59,7 @@ assert.ok(typeof sessionId === "string", "createSession did not return sessionId
 const ids = ["load_data", "quality_check", "sales_stats", "summary_gen", "report_gen"]
 const outputs = ["raw.json", "quality.json", "stats.json", "summary.md", "final_report.md"].map((name) => resolve(workspace, "output", name))
 const tasks = [
-  `实际使用 read 读取 ctx 给出的 CSV 路径，按表头解析全部记录（保留重复行与空单元格），写 JSON 记录数组到 ${outputs[0]}。最终回复准确给出该文件绝对路径。`,
+  `实际使用 read 读取首次任务输入给出的 CSV 路径，按表头解析全部记录（保留重复行与空单元格），写 JSON 记录数组到 ${outputs[0]}。最终回复准确给出该文件绝对路径。`,
   `实际读取上游 JSON 文件，统计原始记录数、完全重复记录数、空单元格数；去重并剔除任何有缺失单元格的记录，保留有效记录。写 JSON {records,duplicates,missingCells,valid:[记录对象]} 到 ${outputs[1]}。最终回复准确给出文件绝对路径。`,
   `实际读取上游质量 JSON，以有效记录 sales_amount 计算统计。写 JSON {records,duplicates,missingCells,valid:有效记录数,total,average:两位小数字符串,maximum:{id:order_id,amount},minimum:{id:order_id,amount}} 到 ${outputs[2]}。最终回复准确给出文件绝对路径。`,
   `实际读取上游统计 JSON，生成中文销售摘要，明确所有数量、总额、平均额、最大和最小记录及订单号；写入 ${outputs[3]}，最终回复准确给出文件绝对路径。`,
@@ -61,26 +68,31 @@ const tasks = [
 const role = (id, kind, systemPrompt, execution) => ({ id, kind, position: { x: 0, y: 0 }, data: { label: id, systemPrompt, provider: provider ?? "", model: model ?? "", presetId: "standard", retryLimit: 2, reactLimit: 50, inputSchema: "", outputSchema: "", ...(execution ? { execution } : {}) } })
 const flowId = `sales-live-${Date.now()}`
 const flow = {
-  id: flowId, sessionId, mode: "mode1", revision: 0, name: "销售 CSV 真实验收", description: "用户提供的 11 行 CSV；通过文件节点绑定输入，所有交接显式走 ctx。",
+  id: flowId, sessionId, mode: "mode1", revision: 0, name: "销售 CSV 真实验收", description: `用户提供的 11 行 CSV；输入方式 ${inputMode}，交接策略 ${handoffPolicy}。`,
+  runtime: { version: 1, handoffPolicy, ...(inputMode === "runtime" ? { inputs: { salesData: { kind: "file" } } } : {}) },
   nodes: [
     { id: "start", kind: "start", position: { x: 0, y: 0 }, data: { label: "启动" } },
     role("parent", "parent", "你是编排父代理。只按流程调度五个业务子代理，等待其实际完成后调度下游，不代替它们执行数据任务。核对节点状态和报告文件后调用 wf_finish；节点失败须如实处理并报告。"),
-    ...ids.map((id, index) => role(id, "agent", tasks[index], { inputSource: "ctx", requiredTools: ["read", "write"], outputFiles: [outputs[index]] })),
+    ...ids.map((id, index) => role(id, "agent", tasks[index], inputMode === "runtime"
+      ? { inputSource: "runtime", requiredTools: ["read", "write"], inputs: { document: { kind: "file", source: index === 0 ? { workflowInput: "salesData" } : { nodeId: ids[index - 1], output: "artifact" } } }, outputs: { artifact: { kind: "file", path: outputs[index] } } }
+      : { inputSource: "ctx", requiredTools: ["read", "write"], outputFiles: [outputs[index]] })),
     { id: "end", kind: "end", position: { x: 0, y: 0 }, data: { label: "结束" } },
-    { id: "csv", kind: "file", position: { x: 0, y: 0 }, data: { label: "销售 CSV 输入", fileKind: "file" } },
+    ...(inputMode === "file-node" ? [{ id: "csv", kind: "file", position: { x: 0, y: 0 }, data: { label: "销售 CSV 输入", fileKind: "file" } }] : []),
   ],
   lines: [],
 }
 const chain = ["start", ...ids, "end"]
 flow.lines.push(...chain.slice(1).map((target, index) => ({ id: `flow-${index}`, source: chain[index], target, sourceHandle: "flow-out", targetHandle: "flow-in" })))
-flow.lines.push(...["csv", ...ids.slice(0, -1)].map((source, index) => ({ id: `ctx-${index}`, source, target: ids[index], sourceHandle: "ctx-out", targetHandle: "ctx-in" })))
+if (inputMode === "file-node") flow.lines.push(...["csv", ...ids.slice(0, -1)].map((source, index) => ({ id: `ctx-${index}`, source, target: ids[index], sourceHandle: "ctx-out", targetHandle: "ctx-in" })))
 await writeFile(resolve(workspace, "live-flow.json"), JSON.stringify(flow, null, 2))
 await api("putWorkflow", { sessionId, flow })
 if (prepareOnly) {
   console.log(JSON.stringify({ status: "prepared", sessionId, flowId, workspace, modelRunStarted: false }))
   process.exit(0)
 }
-const { runId } = await api("run", { sessionId, flowId, fileBindings: { csv: [csv] } })
+const { runId } = await api("run", { sessionId, flowId, ...(inputMode === "runtime"
+  ? { runtimeInputs: { workflowInputs: { salesData: [{ kind: "file", fileRef: { source: "workspace", path: csv } }] }, nodeInputs: {} } }
+  : { fileBindings: { csv: [csv] } }) })
 console.log(JSON.stringify({ phase: "started", runId, sessionId, flowId, provider, model, workspace }))
 const deadline = Date.now() + timeoutMs
 let snapshot

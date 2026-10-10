@@ -15,7 +15,7 @@ import { DEFAULT_SYSTEM_LANGUAGE } from '../system-language.js'
 import type { StartRunOptions, StartRunResult, RunEntry } from './run-entry.js'
 import type { RunSnapshot } from '../shared/types.js'
 import type { WorkflowDocument } from '../shared/graph-model.js'
-import { RuntimeBase } from './runtime-base.js'
+import { RuntimeInputManager } from "./runtime-input-manager.js"
 import { prepareRunInputs } from './execution-inputs.js'
 
 /**
@@ -30,7 +30,7 @@ function orgBudgetTextOf(snapshot: RunSnapshot, flow: WorkflowDocument): string 
   return buildOrgBudgetText(orgBudgetOf(meta, orgUsageOf(flow, { milestoneUsed })))
 }
 
-export class RuntimeLaunch extends RuntimeBase {
+export class RuntimeLaunch extends RuntimeInputManager {
   /**
    * 协作通道判定（编排指令与成员任务块的唯一分支依据）：
    * 官方 Agent Team 可用（服务已挂载 + 根 Agent 存活 + 有可用 provider）→ official；
@@ -92,6 +92,7 @@ export class RuntimeLaunch extends RuntimeBase {
     const runId = this.deps.newRunId?.() ?? `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     const snapshot = createRunSnapshot({ runId, flow, sessionId: runSessionId, mode, now: this.now() })
     snapshot.workingDirectory = await this.deps.workingDirectory?.(runSessionId)
+    await this.prepareRuntimeInputs(flow, snapshot, input.runtimeInputs, input.handoffPolicy)
     await prepareRunInputs(flow, snapshot, input.fileBindings, this.deps.store.root, await this.deps.authorizedInputFiles?.(runSessionId))
     // 元参数三层之第三层（D-13）：把「有效值（模板 ← 实例覆盖）」冻结进快照。
     // 为什么在 startRun 冻结而非每次读取：运行期预算须可审计、可还原；此后改模板/实例
@@ -126,6 +127,7 @@ export class RuntimeLaunch extends RuntimeBase {
     // 运行锁登记（check-then-act 竞态收口）：并发 startRun 可能已在本请求的
     // await 期间登记了同一 flowId 的 run。此处重检 + runs.set 在同一同步块内
     // 完成（Node 单线程内无交错），保证同工作流最多一个激活 run。
+    const executor = await this.prepareParentExecutor(flow, entry)
     this.assertFlowLockFree(flowId, sessionId)
     this.runs.set(runId, entry)
 
@@ -144,7 +146,6 @@ export class RuntimeLaunch extends RuntimeBase {
     //   - 情况1 纯编排：无执行单元，编排指令（orchestrator 变体）；
     //   - 情况2/3 父代理被流程线连接：prepareParentExecutor 先登记执行单元（快照
     //     标记 running、产出执行单元上下文），再按 hybrid/executor 变体组装。
-    const executor = await this.prepareParentExecutor(flow, entry)
     const directive = buildParentRunPrompt({
       flow,
       defPath,
@@ -168,6 +169,7 @@ export class RuntimeLaunch extends RuntimeBase {
     }
 
     // 运行记录：开始即落盘（中断/崩溃后历史面板仍有记录）
+    this.traceRuntime(snapshot, "run_started", "running")
     await this.persistWarn(entry)
     return { runId, defPath, sessionId: runSessionId }
   }
@@ -236,6 +238,7 @@ export class RuntimeLaunch extends RuntimeBase {
     snapshot.workingDirectory = await this.deps.workingDirectory?.(sessionId) ?? prev.workingDirectory
     snapshot.fileBindings = prev.fileBindings ? structuredClone(prev.fileBindings) : undefined
     snapshot.parentRoute = prev.parentRoute ? { ...prev.parentRoute } : undefined
+    await this.prepareRuntimeInputs(flow, snapshot, input.runtimeInputs, input.handoffPolicy)
     await prepareRunInputs(flow, snapshot, input.fileBindings, this.deps.store.root, await this.deps.authorizedInputFiles?.(sessionId))
     const entry: RunEntry = {
       controller: new AbortController(),
@@ -250,7 +253,10 @@ export class RuntimeLaunch extends RuntimeBase {
     }
     // 运行锁登记（check-then-act 竞态收口）：并发 resumeRun/startRun 可能已在本
     // 请求的 await 期间登记同一 flowId 的 run；重检 + 写入同一同步块内完成。
+    const executor = await this.prepareParentExecutor(flow, entry)
     this.assertResumeLockFree(flowId, sessionId)
+    const previousEntry = this.runs.get(prev.id)
+    if (previousEntry?.inputBinding || previousEntry && (previousEntry.snapshot.inputRevision ?? 0) !== (prev.inputRevision ?? 0)) throw new WfError("恢复期间输入发生变化，请重新恢复", "WF_INPUT_REVISION_CONFLICT")
     this.runs.set(runId, entry)
 
     // 流程事实源文件（同 startRun；defPath 注入编排指令）
@@ -270,7 +276,6 @@ export class RuntimeLaunch extends RuntimeBase {
     // 三情况组装与 startRun 一致；prepareParentExecutor 内部对已 ok/react-capped 的
     // 继承态直接返回 null（不重跑）→ buildParentRunPrompt 按「父单元已完成」以
     // orchestrator 变体组装（剩余运行只有编排/收尾，无自执行任务内容）。
-    const executor = await this.prepareParentExecutor(flow, entry)
     const directive = buildParentRunPrompt({
       flow,
       defPath,
@@ -296,6 +301,8 @@ export class RuntimeLaunch extends RuntimeBase {
     await this.persistWarn(entry)
 
     // 释放同工作流的旧 paused 内存条目（磁盘历史保留；锁随新 run 接管）
+    this.traceRuntime(snapshot, "run_started", "resumed")
+    await this.persistWarn(entry)
     for (const [oldId, oldEntry] of [...this.runs]) {
       const old = oldEntry.snapshot
       if (oldId !== runId && old.sessionId === sessionId && old.flowId === flowId && old.status === 'paused') {

@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS workflow_asset_history (
   nodes_json TEXT NOT NULL CHECK (json_valid(nodes_json)),
   lines_json TEXT NOT NULL CHECK (json_valid(lines_json)),
   meta_json TEXT CHECK (meta_json IS NULL OR json_valid(meta_json)),
+  runtime_json TEXT CHECK (runtime_json IS NULL OR json_valid(runtime_json)),
   retrieval_context TEXT,
   source TEXT NOT NULL CHECK (source IN ('human','agent')),
   source_run_id TEXT,
@@ -185,6 +186,7 @@ export const SCHEMA_STATEMENTS: string[] = [
 export function initSchema(db: DatabaseSync): void {
   for (const statement of SCHEMA_STATEMENTS) db.exec(statement)
   ensureExperienceActiveColumn(db)
+  if (!tableColumns(db, "workflow_asset_history").includes("runtime_json")) db.exec("ALTER TABLE workflow_asset_history ADD COLUMN runtime_json TEXT CHECK (runtime_json IS NULL OR json_valid(runtime_json))")
   retireJsonSchemaCheck(db)
 }
 

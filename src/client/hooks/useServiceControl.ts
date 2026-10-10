@@ -71,6 +71,7 @@ export function useServiceControl(dispatch: Dispatch<StudioAction>, remote: Remo
       nodes: JSON.parse(JSON.stringify(template.nodes ?? [])) as ServiceState['nodes'],
       lines: JSON.parse(JSON.stringify(template.lines ?? [])) as ServiceState['lines'],
       // 元参数（模板层 → 实例层）：深拷贝，与模式一同口径
+      ...(template.runtime ? { runtime: structuredClone(template.runtime) } : {}),
       ...(template.meta ? { meta: JSON.parse(JSON.stringify(template.meta)) as ServiceState['meta'] } : {}),
       createdAt: now,
       updatedAt: now,

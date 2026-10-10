@@ -9,11 +9,12 @@
 
 import { buildCollabBlock, type CollabChannel } from '../prompts/index.js'
 import { ctxInEdges, dbInEdges, nodeById, nodeParticipatesInFlow, validateFlow } from '../graph/index.js'
-import type { DatabaseNode, GraphNode, GroupNode, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
+import type { DatabaseNode, GraphNode, GroupNode, Line, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import type { RunSnapshot } from '../shared/types.js'
 import { teammateNameOf } from '../team/index.js'
 import { truncateText } from './snapshot.js'
 import { WfError } from './errors.js'
+import { resolveNodeDependencies } from "./dependency-resolution.js"
 
 /** 数据库访问工具的使用说明（面向模型中文，精简；不随节点变化的三模式描述部分。工具名保留英文 W-03）。 */
 const DB_TOOL_HINT_MODES =
@@ -130,6 +131,7 @@ export function buildNodeContextFacts(input: {
   /** 运行快照：上游角色节点最终产出（ctx 连线显式注入）的读取源。 */
   snapshot: RunSnapshot
   documentTextLimit: number
+  contextEdges?: Line[]
 }): { upstreamContext: Array<{ source: string; content: string }>; filePaths: string[]; dbToolHint: string } {
   const { flow, node } = input
   // 上游上下文（ctx-in 显式连线）：
@@ -139,7 +141,7 @@ export function buildNodeContextFacts(input: {
   //     明确「上游最终输出作为上下文传入下游；不连接则不传」。
   const upstreamContext: Array<{ source: string; content: string }> = []
   const filePaths: string[] = []
-  for (const edge of ctxInEdges(flow, node.id)) {
+  for (const edge of input.contextEdges ?? resolveNodeDependencies(flow, node, input.snapshot).contextEdges) {
     const original = nodeById(flow, edge.source)
     const src = original?.kind === "proxy" ? nodeById(flow, original.proxySourceId) : original
     if (!src) continue

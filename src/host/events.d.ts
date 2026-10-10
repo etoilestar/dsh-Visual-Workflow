@@ -26,6 +26,8 @@ import '@deepseek-ai/cordis'
 
 declare module '@deepseek-ai/cordis' {
   interface Events {
+    "tools/pre-execute"(exec: import("./tools/index.js").ParentToolExecution, next: () => Promise<import("./tools/index.js").ParentToolDecision>): Promise<import("./tools/index.js").ParentToolDecision>
+    "tools/result"(exec: import("./tools/index.js").ParentToolExecution, result: { isError?: unknown; error?: unknown }): void
     "subagent/start"(payload: { runId?: unknown; provider?: unknown; id?: unknown; local?: unknown }): void
     /** 子代理生命周期结束事件（官方 subagent seam 观察语义，架构文档 §8 #21）。 */
     'subagent/end'(payload: {

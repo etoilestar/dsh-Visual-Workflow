@@ -7,6 +7,7 @@
 import { failureOf, setNodeStatus, terminalizeNodes } from './snapshot.js'
 import type { RunEntry, TerminateOptions } from './run-entry.js'
 import { RuntimeObserve } from './runtime-observe.js'
+import { failedNodeResult } from "./node-results.js"
 
 export class RuntimeLifecycle extends RuntimeObserve {
   // ---- 终止 / 停止 ------------------------------------------------------------
@@ -18,11 +19,19 @@ export class RuntimeLifecycle extends RuntimeObserve {
    * 防止长期运行内存膨胀；running/paused 条目保留（续跑/锁查询需要）。
    */
   async terminateRun(entry: RunEntry, options: TerminateOptions): Promise<boolean> {
+    if (entry.terminationDone) return entry.terminationDone
+    const pending = this.finishTermination(entry, options)
+    entry.terminationDone = pending
+    try { return await pending } finally { delete entry.terminationDone }
+  }
+
+  private async finishTermination(entry: RunEntry, options: TerminateOptions): Promise<boolean> {
     const snapshot = entry.snapshot
     if (!snapshot || (snapshot.status !== 'running' && snapshot.status !== 'paused')) return false
 
     // 1. 中止控制器：阻塞中的 wait 等待器随之取消
     entry.controller.abort(options.abortReason ?? `terminate-${options.status}`)
+    await entry.inputBindingDone
     // 2. 尽力中断运行中的子代理回合（防止后台空转）
     for (const childId of [...entry.inflight]) {
       try {
@@ -38,7 +47,13 @@ export class RuntimeLifecycle extends RuntimeObserve {
     snapshot.endedAt = this.isoNow()
     snapshot.termination = options.termination ?? { source: options.abortReason === "user-stop" ? "user_stop" : options.abortReason === "idle-timeout" ? "idle_timeout" : "runtime", stopReason: options.abortReason ?? options.status }
     this.log().info(JSON.stringify({ runId: snapshot.id, phase: "run_finish", status: snapshot.status, source: snapshot.termination.source, stopReason: snapshot.termination.stopReason, errorCode: snapshot.termination.failure?.code }))
+    const executing = snapshot.nodes.filter((node) => node.status === "running")
     terminalizeNodes(snapshot, this.now(), options.status === 'stopped' ? 'stop' : 'interrupt')
+    for (const node of executing) {
+      node.result = failedNodeResult(snapshot, node.nodeId, node.childId)
+      delete node.artifacts
+    }
+    this.traceRuntime(snapshot, "run_failed", options.status, { errorCode: snapshot.termination.failure?.code })
     this.rejectWaiters(entry)
     this.rejectAsks(entry)
     await this.persistWarn(entry)
@@ -55,6 +70,8 @@ export class RuntimeLifecycle extends RuntimeObserve {
   async stopRun(runId: string): Promise<void> {
     const entry = this.runs.get(runId)
     if (!entry) return
+    try { this.deps.agents.cancelRoot?.(entry.snapshot.sessionId, "WF_CANCELLED") }
+    catch (error) { this.warn(`用户停止时父代理取消失败：${String(error)}`) }
     await this.terminateRun(entry, { status: 'stopped', summary: '运行已停止', abortReason: 'user-stop' })
   }
 
@@ -72,6 +89,7 @@ export class RuntimeLifecycle extends RuntimeObserve {
     if (!entry || entry.snapshot.status !== 'running') return false
     const snapshot = entry.snapshot
     snapshot.status = 'paused'
+    await entry.inputBindingDone
     snapshot.summary = options.summary ?? '执行窗口结束，已暂停（等待下一窗口继续）'
     await this.persistWarn(entry)
     return true

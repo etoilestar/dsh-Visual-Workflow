@@ -2,15 +2,20 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { AgentHost, RootAgentLike, RootInjectedMessage, TurnEndInfo } from '../orchestrator/index.js';
 import type { FlowStore } from '../storage/flow-store.js';
 import type { AgentsServiceLike, SubagentsServiceLike } from './runner.js';
+import type { SessionInputFile } from "../shared/runtime-types.js";
+import { type TokenAccounting } from "./token-accounting.js";
 export declare class CordisAgentHost implements AgentHost {
     private readonly ctx;
     constructor(ctx: Context);
     /** 解析 agents 服务（缺省/不可用时返回 null，调用方给明确错误）。 */
     private agentsService;
     available(): boolean;
+    cancelRoot(sessionId: string, reason: string): void;
+    tokenUsageSince(agentId: string, afterMs: number): TokenAccounting | null;
     getRootAgent(sessionId: string): RootAgentLike | null;
     /** 只读取该会话用户消息内的已接纳文件引用，由官方附件服务验证并解析宿主路径。 */
     authorizedInputFiles(sessionId: string): string[];
+    sessionInputFiles(sessionId: string): SessionInputFile[];
     /** 按会话 id 取子代理 agent（wf_ask_agent 投递缝用；未激活返回 null）。 */
     getChildAgent(childId: string): RootAgentLike | null;
     followupRoot(agent: RootAgentLike, message: RootInjectedMessage): void;

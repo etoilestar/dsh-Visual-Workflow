@@ -4,7 +4,7 @@
 // 节点壳重建等价、回滚、退役、引用统计单调递增与新版本重置。
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ERR_ASSET_NOT_FOUND, ERR_ASSET_VERSION_NOT_FOUND } from '../../../src/host/shared/protocol.js'
+import { ERR_ASSET_BAD_ARGS, ERR_ASSET_NOT_FOUND, ERR_ASSET_VERSION_NOT_FOUND } from '../../../src/host/shared/protocol.js'
 import type { RoleNode } from '../../../src/host/shared/graph-model.js'
 import { AssetStore, type AssetError } from '../../../src/host/assets/index.js'
 import { flowLine, makeStore, orgMeta, removeTempRoot, roleNode, roleTemplate, stageNode } from './fixtures/asset-fixture.js'
@@ -21,6 +21,35 @@ beforeEach(async () => {
 afterEach(async () => {
   store.close()
   await removeTempRoot(root)
+})
+
+it("test_workflow_runtime_and_node_contract_survive_save_reopen_and_rollback", async () => {
+  const runtime = { version: 1 as const, handoffPolicy: "auto" as const, inputs: { subject: { kind: "text" as const } }, budget: { nodeExecutionLimit: 4 } }
+  const execution = { inputs: { subject: { kind: "text" as const, source: { workflowInput: "subject" } } }, outputs: { result: { kind: "json" as const, schema: { type: "object" as const, required: ["count"] } } } }
+  const request = { templateId: "runtime-template", fingerprint: "one", mode: "mode1" as const, name: "runtime", description: "", nodes: [roleNode({ id: "first", data: { execution } })], lines: [], source: "human" as const, runtime }
+  const first = await store.promoteWorkflow(request)
+  const firstDetail = await store.getWorkflowAsset(first.assetId)
+  expect(firstDetail?.runtime).toEqual(runtime)
+  expect(firstDetail?.nodes[0]).toMatchObject({ data: { execution } })
+  const second = await store.saveWorkflowVersion({ ...request, assetId: first.assetId, runtime: { ...runtime, handoffPolicy: "strict" } })
+  expect(second).toMatchObject({ versionId: 2, unchanged: false })
+  const third = await store.saveWorkflowVersion({ ...request, assetId: first.assetId, runtime: { ...runtime, handoffPolicy: "strict" }, nodes: [roleNode({ id: "first", data: { execution: { ...execution, completion: "verified" } } })] })
+  expect(third).toMatchObject({ versionId: 3, unchanged: false })
+  expect(await store.listRoleAssets()).toHaveLength(1)
+  store.close()
+  store = new AssetStore(root)
+  await store.init()
+  expect((await store.getWorkflowAsset(first.assetId))?.nodes[0]).toMatchObject({ data: { execution: { completion: "verified" } } })
+  const restored = await store.rollbackWorkflowAsset(first.assetId, 1)
+  expect(restored.runtime).toEqual(runtime)
+  expect(restored.nodes[0]).toMatchObject({ data: { execution } })
+  expect(await store.listWorkflowVersions(first.assetId)).toHaveLength(3)
+})
+
+it("test_invalid_runtime_does_not_commit_asset_or_role_rows", async () => {
+  await expect(store.promoteWorkflow({ templateId: "invalid", fingerprint: "bad", mode: "mode1", name: "invalid", description: "", nodes: [roleNode({ id: "n" })], lines: [], source: "human", runtime: { version: 2 } as unknown as NonNullable<Parameters<AssetStore["promoteWorkflow"]>[0]["runtime"]> })).rejects.toMatchObject({ code: ERR_ASSET_BAD_ARGS })
+  expect(await store.listWorkflowAssets()).toEqual([])
+  expect(await store.listRoleAssets()).toEqual([])
 })
 
 describe('工作流模版晋升（算法 E）', () => {

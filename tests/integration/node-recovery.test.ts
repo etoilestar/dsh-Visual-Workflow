@@ -1,6 +1,9 @@
 // Real runner + runtime + permission/prompt setup + persistence; only the DSH transport is fake.
 import { afterEach, expect, it, onTestFinished, vi } from "vitest"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import type { NodeStartInput } from "../../src/host/orchestrator/index.js"
+import type { WorkflowDocument } from "../../src/host/shared/graph-model.js"
 import { NodeAgentRunner } from "../../src/host/agent/runner.js"
 import type { SubagentsServiceLike } from "../../src/host/agent/runner.js"
 import { createChildToolFilterSetup } from "../../src/host/agent/child-tool-filter.js"
@@ -11,9 +14,11 @@ import { caller, cleanupTempDirs, makeFlow, makeHarness, start } from "../host/o
 
 afterEach(cleanupTempDirs)
 
-async function makeRealRunnerHarness(nodeId = "n-a1") {
+async function makeRealRunnerHarness(nodeId = "n-a1", configure?: (flow: WorkflowDocument) => void) {
   const h = await makeHarness()
   const flow = makeFlow()
+  configure?.(flow)
+  for (const item of flow.nodes) if (item.kind === "agent") item.data.presetId = "standard"
   const node = flow.nodes.find((node) => node.id === nodeId)!
   if (node.kind !== "agent") throw new Error("fixture")
   node.data.presetId = "standard"
@@ -38,7 +43,9 @@ async function makeRealRunnerHarness(nodeId = "n-a1") {
     startContinuable: async (spec) => {
       // Creation-window state is real AsyncLocalStorage, never broadened on recovery.
       expect(toolFilter.peekPending?.()).toEqual(["read", "write"])
-      expect(promptSetup.peekPending()).toMatchObject({ systemPrompt: node.data.systemPrompt })
+      const active = dispatched.at(-1)?.node
+      if (!active || active.kind !== "agent") throw new Error("missing dispatched agent")
+      expect(promptSetup.peekPending()).toMatchObject({ systemPrompt: active.data.systemPrompt })
       starts.push(spec)
       control.onStart?.()
       await control.startGate
@@ -230,4 +237,68 @@ it("test_dispatch_paused_child_settles_and_checkpoint_retry_rebuilds_unrecoverab
   expect(current.snapshot.nodes.find((record) => record.nodeId === node.id)).toMatchObject({ status: "running", attempts: 1, childId: "child-2" })
   await settle("child-2")
   expect(current.snapshot.nodes.find((record) => record.nodeId === node.id)?.status).toBe("ok")
+})
+
+it("test_runtime_real_runner_json_serial_handoff_is_in_first_child_prompt", async () => {
+  const { h, entry, starts, dispatched } = await makeRealRunnerHarness("n-a1", (flow) => {
+    flow.runtime = { version: 1, handoffPolicy: "auto" }
+    flow.nodes = flow.nodes.filter((node) => node.kind !== "pause")
+    flow.lines = [
+      { id: "entry", source: "n-start", target: "n-a1", sourceHandle: "flow-out", targetHandle: "flow-in" },
+      { id: "serial", source: "n-a1", target: "n-a2", sourceHandle: "flow-out", targetHandle: "flow-in" },
+      { id: "exit", source: "n-a2", target: "n-end", sourceHandle: "flow-out", targetHandle: "flow-in" },
+    ]
+    for (const node of flow.nodes) if (node.kind === "agent") node.data.execution = node.id === "n-a1"
+      ? { outputs: { facts: { kind: "json", schema: { type: "object", required: ["total"] } } } }
+      : { inputs: { data: { kind: "json", source: { nodeId: "n-a1", output: "facts" } } } }
+  })
+  await expect(h.runtime.wfRunNode(caller, { nodeId: "n-a2" })).rejects.toMatchObject({ code: "WF_DEPENDENCY_UNSATISFIED" })
+  expect(starts).toHaveLength(0)
+  await h.runtime.wfRunNode(caller, { nodeId: "n-a1" })
+  await h.runtime.handleSubagentEnd({ id: "child-1", runId: "epoch-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: '{"total":42}' }] })
+  await h.runtime.wfRunNode(caller, { nodeId: "n-a2" })
+  expect(dispatched[1].invocation?.inputs.data[0]).toMatchObject({ kind: "json", value: { total: 42 }, origin: { nodeId: "n-a1", attempt: 1 } })
+  expect(starts[1].request.prompt.map((part) => part.text).join("\n")).toContain('"total":42')
+  expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")?.result).toMatchObject({ status: "succeeded", confirmation: "verified" })
+})
+
+it("test_runtime_real_runner_missing_input_can_bind_and_dispatch_with_zero_retry_budget", async () => {
+  const { h, entry, starts, dispatched, node } = await makeRealRunnerHarness("n-a1", (flow) => {
+    const task = flow.nodes.find((node) => node.id === "n-a1")!
+    if (task.kind === "agent") task.data.execution = { inputs: { topic: { kind: "text" } }, outputs: { answer: { kind: "text" } } }
+  })
+  await expect(h.runtime.wfRunNode(caller, { nodeId: node.id, retryLimit: 0 })).rejects.toMatchObject({ code: "WF_INPUT_REQUIRED" })
+  expect(starts).toEqual([])
+  expect(entry.callCount).toBe(0)
+  expect(entry.snapshot.nodes.find((record) => record.nodeId === node.id)).toMatchObject({ status: "pending", attempts: 0 })
+  await h.runtime.bindRuntimeInputs({ sessionId: "session-1", runId: entry.snapshot.id, expectedRevision: 0, nodeId: node.id, inputs: { topic: [{ kind: "text", value: "first task input" }] } })
+  await h.runtime.wfRunNode(caller, { nodeId: node.id, retryLimit: 0 })
+  expect(dispatched[0].invocation?.inputs.topic[0]).toMatchObject({ kind: "text", value: "first task input" })
+  expect(starts[0].request.prompt.map((part) => part.text).join("\n")).toContain("first task input")
+})
+
+it("test_runtime_real_runner_request_for_missing_json_does_not_publish_success", async () => {
+  const { h, node, entry } = await makeRealRunnerHarness("n-a1", (flow) => {
+    const task = flow.nodes.find((node) => node.id === "n-a1")!
+    if (task.kind === "agent") task.data.execution = { outputs: { data: { kind: "json", schema: { type: "object", required: ["result"] } } } }
+  })
+  await h.runtime.wfRunNode(caller, { nodeId: node.id })
+  await h.runtime.handleSubagentEnd({ id: "child-1", runId: "epoch-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "Please provide missing input" }] })
+  expect(entry.snapshot.nodes.find((record) => record.nodeId === node.id)).toMatchObject({ status: "fail", result: { status: "failed", outputs: {}, artifacts: [] }, failure: { phase: "run_finish", code: "WF_OUTPUT_INVALID", nodeId: node.id, attempt: 1 } })
+})
+
+it("test_runtime_real_runner_managed_upload_without_file_node_is_in_first_task", async () => {
+  const { h, node, entry, starts, dispatched } = await makeRealRunnerHarness("n-a1", (flow) => {
+    const task = flow.nodes.find((node) => node.id === "n-a1")!
+    if (task.kind === "agent") task.data.execution = { inputs: { document: { kind: "file" } } }
+  })
+  const directory = join(h.store.root, "data", "files")
+  await mkdir(directory, { recursive: true })
+  const path = join(directory, "uploaded.txt")
+  await writeFile(path, "authorized input")
+  await h.runtime.bindRuntimeInputs({ sessionId: "session-1", runId: entry.snapshot.id, expectedRevision: 0, nodeId: node.id, inputs: { document: [{ kind: "file", fileRef: { source: "managed", path } }] } })
+  await h.runtime.wfRunNode(caller, { nodeId: node.id })
+  expect(dispatched[0].invocation?.inputs.document[0]).toMatchObject({ kind: "file", fileRef: { source: "managed", path }, origin: { source: "managed" } })
+  expect(starts[0].request.prompt.map((block) => block.text).join("\n")).toContain(path)
+  expect((await h.store.getRun(entry.snapshot.id))?.runtimeInputs?.nodeInputs[node.id].document[0]).toMatchObject({ fileRef: { path } })
 })

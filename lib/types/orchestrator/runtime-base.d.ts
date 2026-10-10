@@ -53,6 +53,7 @@ export declare abstract class RuntimeBase {
     now(): number;
     /** 当前 ISO 时间字符串。 */
     protected isoNow(): string;
+    protected traceRuntime(snapshot: RunSnapshot, phase: string, status: string, fields?: Partial<Omit<import("../shared/runtime-types.js").RuntimeEvent, "runId" | "flowId" | "phase" | "status" | "at">>): void;
     /**
      * 把父代理（会话根 Agent）节点的配置注入到根 Agent 的 ctx：
      *   - 角色 Prompt（含 .md 路径读取）注册为系统提示词段 visual-workflow:prompt；
@@ -89,7 +90,8 @@ export declare abstract class RuntimeBase {
      * P3：**闸门轮（executorIsMilestone）不生效**——闸门的完成只能由
      * `wf_graph_patch(mark_node)` 写入（D-07），否则自动标记会把闸门静默放过。
      */
-    protected markParentExecutorDone(entry: RunEntry): void;
+    protected markParentExecutorDone(entry: RunEntry): Promise<void>;
+    private settleParentExecutor;
     /**
      * 本会话在编运行已完成的门闸数（D-21：不含首次编排）。
      * 口径唯一来源是快照的 `milestoneUsed`（可审计 + 续跑继承），无活跃 run 时为 0。

@@ -1,3 +1,4 @@
+import { workflowToolError } from "../infrastructure/workflow-tool-error.js"
 // src/host/tools/wf-run-node-wait/tool.ts
 //
 // wf_run_node_wait 工具注册（模式二后台服务：阻塞等待节点完成，返回 ok/fail + 最终输出）。
@@ -39,6 +40,7 @@ export function registerWfRunNodeWait(
       'If the run is paused or stopped, this call first resumes it from the checkpoint and then starts the node. ' +
       'Child agents are rejected; fails with WF_* codes on invalid arguments, missing nodes, or mode mismatch.',
     parameters: {
+      selectedEdgeIds: { type: "array", items: { type: "string" }, description: "Explicitly selected conditional incoming flow edge ids for this dispatch; required for conditional auto/strict handoff." },
       nodeId: { type: 'string', required: true, description: 'Node id from the flow definition file (nodes[].id) to start. A proxy node is a real flow step: pass the proxy id and the runtime resolves it to its source node for execution — never skip a proxy or pass its source node id instead.' },
       thinking: { type: 'string', description: 'Optional reasoning-effort override for this node run; value domain follows the official adapter.' },
       iterationLimit: { type: 'number', description: 'Optional ReAct iteration-limit override (soft cap: the child stops calling tools and concludes).' },
@@ -57,7 +59,7 @@ export function registerWfRunNodeWait(
       },
       render: textRender,
     },
-    execute: (args, exec) => host.orchestrator.wfRunNode(callerOf(exec), { ...(args ?? {}), wait: true }, exec.signal, { expectedMode: 'mode2' }),
+    execute: (args, exec) => host.orchestrator.wfRunNode(callerOf(exec), { ...(args ?? {}), wait: true }, exec.signal, { expectedMode: 'mode2' }).catch(workflowToolError),
   })
 
   const dispose = tools.register(definition)
