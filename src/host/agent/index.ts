@@ -14,6 +14,7 @@ export {
   agentPresetsServiceOf,
   childVisibilityContribution,
   releasePresetLease,
+  withPresetScope,
   resolveRolePrompt,
   type AgentPresetsServiceLike,
   type AgentsServiceLike,

@@ -254,9 +254,43 @@
 
 ---
 
+## 宿主兼容性与现场验收
+
+Preset Scope 按公开能力选择：优先 `acquireScope()`，读取 `lease.key` 后在 `finally` 中释放一次；只有没有该方法时才使用 `standingKeyFor()`，直接读取 ScopeKey，不释放旧版结果。新版获取失败不会切换旧版，解析失败不会授权全局工具。目录枚举与节点执行共用这套规则；`list()` 枚举成功不代表 Scope 可用。
+
+| 宿主 | 本次实际验证 | 真实 Docker 五节点模型 E2E |
+| --- | --- | --- |
+| DSH `0.1.6-alpha.2` | 官方 Registry / Loader 的受控 Preset 配置通过 `standingKeyFor()` 读取；官方工具运行时权限检查通过；Fake `standard` 子代理启动与权限生命周期回归通过 | **NOT RUN**，由现场执行 |
+| DSH `0.2.0-rc.2` | 官方 Registry / Loader 的受控 Preset 配置通过 `acquireScope()` 读取，释放后撤销配置无残留；官方工具运行时权限检查通过 | **NOT RUN**，由现场执行 |
+| 其他提供上述公开接口的版本 | 按能力理论兼容，尚未逐版本实测 | **NOT RUN** |
+
+受控配置的官方接口检查不等同于宿主自带 `standard` 的完整模型验收。可在独立安装的官方运行时上重现：
+
+```bash
+DSH_RUNTIME_PACKAGE="<官方 @deepseek-ai/dsh/package.json 的绝对路径>" node scripts/dsh-scope-smoke.mjs
+```
+
+节点解析失败保留 `WF_CHILD_TOOL_POLICY_FAILED`，日志包含 `presetId`、`stage`、原始异常类型及脱敏原因，已知时附带 `runId` / `nodeId`。阶段包括服务缺失、接口不兼容、Scope 获取失败、无效 Key 和 schema 读取失败；租约释放失败单独记录 `preset_scope_release_failed`，不扩大权限。隐藏父代理工具、`run_code` 排除、未注册 `subagent` 保护、requiredTools 校验和创建/恢复/撤销策略保持生效。
+
+真实销售 CSV 验收须在 DSH 容器内执行，或让脚本和宿主共享同一文件系统。容器内需有本仓库完整源码（含脚本与 CSV fixture），且已装载本补丁；provider/model 必须使用 DSH 中的实际路由标识。不要假定 provider 为 `ollama` / `openai`，也不要把本地 `host.docker.internal` 当作云端可访问服务。
+
+```bash
+docker exec -it <DSH容器名> sh
+cd <容器内本仓库完整源码路径>
+node scripts/run-sales-live.mjs --help
+DSH_BASE_URL="<DSH Web 的实际 URL>" \
+DSH_TEST_PROVIDER="<DSH 中的实际 provider 标识>" \
+DSH_TEST_MODEL="<DSH 中的实际 model 标识>" \
+node scripts/run-sales-live.mjs
+```
+
+可另设 `DSH_TEST_WORKSPACE` 为新的容器内绝对目录、`SALES_CSV` 为输入 CSV 路径、`DSH_TEST_TIMEOUT_MS` 为验收超时。需要 Web token 登录时，设 `DSH_WEB_LOG` 指向容器内的 Web 启动日志，脚本只提取认证信息，不输出 token。`--prepare-only` 只创建测试会话和流程，不启动模型。
+
+脚本逐一检查 `load_data → quality_check → sales_stats → summary_gen → report_gen` 的真实 childId、结算、模型路由与产物，并校验工作流完成和最终报告。成功统计为 11 条原始记录、1 条重复记录、2 个缺失单元格、9 条有效记录、销售总额 15900、平均额 1766.67；失败时检查工作目录中的 `live-run.json` 与宿主日志。Mock/Fake 通过不能代替这项现场验收。
+
 ## 安装（Windows）
 
-> **版本适配**：本插件适配 **DeepSeek Harness `0.2.0-rc.2`**。请先安装或升级宿主（升级前先在外部终端**完全停止 dsh 进程**）：
+> **安装示例**：以下使用 **DeepSeek Harness `0.2.0-rc.2`**；旧版 `0.1.6-alpha.2` 的 Preset Scope 兼容范围与验收状态见上文。本次补丁不要求升级现有宿主。新安装可使用：
 >
 > ```bash
 > npm install -g @deepseek-ai/dsh@0.2.0-rc.2

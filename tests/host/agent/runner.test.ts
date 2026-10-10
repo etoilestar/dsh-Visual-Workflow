@@ -22,6 +22,8 @@ import {
   nodeChildSignature,
   pickProviderName,
   resolveAgentTools,
+  agentPresetsServiceOf,
+  withPresetScope,
   type AgentsServiceLike,
   type SubagentsServiceLike,
   type ToolsView,
@@ -754,18 +756,15 @@ describe('DSH 0.1.2 子代理 seam（getProvider 探测 / childSetup 安装 / se
 })
 
 // ---------------------------------------------------------------------------
-// CordisToolsView：preset standing scope 经 acquireScope 租约取用
+// CordisToolsView：按公开能力读取新旧 Preset Scope
 // ---------------------------------------------------------------------------
-// 【0.1.7-rc.1】官方 agentPresets 移除 standingKeyFor，唯一通道是
-// acquireScope(id?) → { key } & AsyncDisposable（引用租约，读完必须释放）。
-// 这些用例锁定：取用路径、租约释放（不泄漏引用计数）、能力缺失/失败时的降级。
 
 /** `Symbol.asyncDispose` 运行时取值（host program lib 为 es2022，不含 esnext.disposable）。 */
 const ASYNC_DISPOSE = (Symbol as unknown as { asyncDispose: symbol }).asyncDispose
 
 /** 构造 CordisToolsView 所需的最小 ctx fake。 */
-function toolsViewCtx(services: Record<string, unknown>): never {
-  return { get: (name: string) => services[name] } as never
+function toolsViewCtx(services: Record<string, unknown>, warn = vi.fn()): { get(name: string): unknown; logger: { warn: typeof warn } } {
+  return { get: (name: string) => services[name], logger: { warn } }
 }
 
 describe('CordisToolsView / preset standing scope（acquireScope 租约）', () => {
@@ -784,16 +783,19 @@ describe('CordisToolsView / preset standing scope（acquireScope 租约）', () 
     expect(released).toBe(1)
   })
 
-  it('acquireScope 缺失（0.1.5 旧宿主）：能力守卫判为不可用 → presetToolNames 返回 null', async () => {
+  it("test_old_standing_key_standard_reads_tools_without_disposal", async () => {
+    const dispose = vi.fn()
+    const key = { [ASYNC_DISPOSE]: dispose }
     const view = new CordisToolsView(toolsViewCtx({
-      tools: { schemas: () => [{ name: 'read' }] },
-      agentPresets: { list: async () => [{ id: 'standard' }], standingKeyFor: async () => ({}) },
+      tools: { schemas: (scope: unknown) => scope === key ? [{ name: "read" }, { name: "write" }] : [{ name: "global_only" }] },
+      agentPresets: { list: async () => [{ id: "standard" }], standingKeyFor: async () => key },
     }))
 
-    expect(await view.presetToolNames('standard')).toBeNull()
+    expect(await view.presetToolNames("standard")).toEqual(["read", "write"])
+    expect(dispose).not.toHaveBeenCalled()
   })
 
-  it('acquireScope 抛错：返回 null 不抛（降级为「无 preset 白名单」）', async () => {
+  it("test_acquire_failure_keeps_diagnostic_and_rejects", async () => {
     const view = new CordisToolsView(toolsViewCtx({
       tools: { schemas: () => [{ name: 'read' }] },
       agentPresets: {
@@ -802,10 +804,10 @@ describe('CordisToolsView / preset standing scope（acquireScope 租约）', () 
       },
     }))
 
-    expect(await view.presetToolNames('standard')).toBeNull()
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ code: "WF_CHILD_TOOL_POLICY_FAILED", presetStage: "preset_scope_acquire_failed", reason: "preset 未激活", errorType: "Error" })
   })
 
-  it('租约缺 key：返回 null，且租约仍被释放（不泄漏引用计数）', async () => {
+  it("test_missing_lease_key_rejects_and_releases_once", async () => {
     let released = 0
     const view = new CordisToolsView(toolsViewCtx({
       tools: { schemas: () => [{ name: 'read' }] },
@@ -815,7 +817,7 @@ describe('CordisToolsView / preset standing scope（acquireScope 租约）', () 
       },
     }))
 
-    expect(await view.presetToolNames('standard')).toBeNull()
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ presetStage: "preset_scope_key_invalid" })
     expect(released).toBe(1)
   })
 
@@ -843,5 +845,224 @@ describe('CordisToolsView / preset standing scope（acquireScope 租约）', () 
 
     expect((await view.visibleToolNames()).sort()).toEqual(['glob', 'read', 'write'])
     expect(released).toBe(2)
+  })
+})
+
+describe("Preset capability diagnostics and lifecycle", () => {
+  it("test_node_schema_failure_releases_lease_and_rejects_with_run_diagnostic_before_start", async () => {
+    const h = await makeHarness()
+    const dispose = vi.fn()
+    const warn = vi.fn()
+    const schemas = vi.fn((key?: unknown) => {
+      if (key === undefined) throw new Error("unrelated global enumeration must not precede preset execution")
+      throw new TypeError("chosen scope schemas failed")
+    })
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas }, agentPresets: {
+      list: async () => [{ id: "standard" }], acquireScope: async () => ({ key: {}, [ASYNC_DISPOSE]: dispose }),
+    } }, warn))
+    h.toolsView.visibleToolNames = view.visibleToolNames.bind(view)
+    h.toolsView.presetToolNames = view.presetToolNames.bind(view)
+    await expect(h.runner.startNodeTask(taskInput({ runId: "run-schema", node: agentNode("load_data", { presetId: "standard" }) }))).rejects.toMatchObject({ code: "WF_CHILD_TOOL_POLICY_FAILED", presetStage: "preset_tool_schema_failed", reason: "chosen scope schemas failed" })
+    expect(schemas).toHaveBeenCalledTimes(1)
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(h.subagents.started).toEqual([])
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({ runId: "run-schema", nodeId: "load_data", stage: "preset_tool_schema_failed", errorType: "TypeError" })
+    h.runner.dispose()
+  })
+
+  it("test_release_failure_logs_once_without_expanding_the_parsed_whitelist", async () => {
+    const warn = vi.fn()
+    const dispose = vi.fn(async () => { throw new TypeError("release refused token=private-token") })
+    const key = {}
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: (scope: unknown) => scope === key ? [{ name: "read" }] : [{ name: "unapproved" }] }, agentPresets: {
+      list: async () => [], acquireScope: async () => ({ key, [ASYNC_DISPOSE]: dispose }),
+    } }, warn))
+    expect(await view.presetToolNames("standard", { runId: "run-release", nodeId: "load_data" })).toEqual(["read"])
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({ presetId: "standard", runId: "run-release", nodeId: "load_data", stage: "preset_scope_release_failed", errorType: "TypeError", reason: "release refused token=[redacted]" })
+  })
+
+  it("test_read_and_release_failures_remain_separate_and_creation_stays_closed", async () => {
+    const warn = vi.fn()
+    const dispose = vi.fn(async () => { throw new Error("release failed") })
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: () => { throw new TypeError("schemas failed") } }, agentPresets: {
+      list: async () => [], acquireScope: async () => ({ key: {}, [ASYNC_DISPOSE]: dispose }),
+    } }, warn))
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ presetStage: "preset_tool_schema_failed", reason: "schemas failed" })
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls.map(([message]) => JSON.parse(message).stage)).toEqual(["preset_scope_release_failed", "preset_tool_schema_failed"])
+  })
+
+  it("test_adapter_without_either_scope_method_rejects_before_read", async () => {
+    const read = vi.fn()
+    await expect(withPresetScope({ list: async () => [] }, "standard", read)).rejects.toMatchObject({ presetStage: "preset_api_unsupported" })
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it("test_old_standard_node_starts_child_with_pending_whitelist_without_request_tool_filter", async () => {
+    const h = await makeHarness()
+    const key = {}
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: (scope?: unknown) => scope === key ? [{ name: "read" }, { name: "write" }] : [] }, agentPresets: {
+      list: async () => [{ id: "standard" }], standingKeyFor: async () => key,
+    } }))
+    h.toolsView.visibleToolNames = view.visibleToolNames.bind(view)
+    h.toolsView.presetToolNames = view.presetToolNames.bind(view)
+    const result = await h.runner.startNodeTask(taskInput({ runId: "run-old", node: agentNode("load_data", { presetId: "standard", execution: { requiredTools: ["read", "write"] } }) }))
+    expect(result).toEqual({ childId: "child-1", created: true })
+    expect(h.subagents.started).toHaveLength(1)
+    expect(h.subagents.started[0]!.request).not.toHaveProperty("toolFilter")
+    h.runner.dispose()
+  })
+
+  it("test_old_scope_failure_prevents_child_creation_and_reports_run_node", async () => {
+    const h = await makeHarness()
+    const warn = vi.fn()
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: () => [{ name: "read" }] }, agentPresets: {
+      list: async () => [{ id: "standard" }], standingKeyFor: async () => { throw new Error("standing scope unavailable") },
+    } }, warn))
+    h.toolsView.visibleToolNames = view.visibleToolNames.bind(view)
+    h.toolsView.presetToolNames = view.presetToolNames.bind(view)
+    await expect(h.runner.startNodeTask(taskInput({ runId: "run-failed", node: agentNode("load_data", { presetId: "standard" }) }))).rejects.toMatchObject({ code: "WF_CHILD_TOOL_POLICY_FAILED", presetStage: "preset_scope_acquire_failed" })
+    expect(h.subagents.started).toEqual([])
+    expect(warn.mock.calls.map(([message]) => JSON.parse(message))).toContainEqual(expect.objectContaining({ runId: "run-failed", nodeId: "load_data", stage: "preset_scope_acquire_failed" }))
+    h.runner.dispose()
+  })
+
+  it("test_both_scope_apis_prefers_acquire_and_releases_once", async () => {
+    const key = {}
+    const dispose = vi.fn()
+    const standingKeyFor = vi.fn(async () => ({}))
+    const presets = { list: async () => [], acquireScope: vi.fn(async () => ({ key, [ASYNC_DISPOSE]: dispose })), standingKeyFor }
+    const ctx = toolsViewCtx({ agentPresets: presets })
+    expect(agentPresetsServiceOf(ctx)).toBe(presets)
+    expect(await withPresetScope(presets, "standard", (scope) => scope)).toBe(key)
+    expect(presets.acquireScope).toHaveBeenCalledWith("standard")
+    expect(standingKeyFor).not.toHaveBeenCalled()
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it("test_new_acquire_failure_does_not_fallback_to_standing_key", async () => {
+    const standingKeyFor = vi.fn(async () => ({}))
+    const schemas = vi.fn(() => [{ name: "global_only" }])
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas }, agentPresets: {
+      list: async () => [], acquireScope: async () => { throw new TypeError("new API failed") }, standingKeyFor,
+    } }))
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ presetStage: "preset_scope_acquire_failed", errorType: "TypeError", reason: "new API failed" })
+    expect(standingKeyFor).not.toHaveBeenCalled()
+    expect(schemas).not.toHaveBeenCalled()
+  })
+
+  it("test_old_key_failure_rejects_without_global_tool_fallback", async () => {
+    const schemas = vi.fn(() => [{ name: "global_only" }])
+    const warn = vi.fn()
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas }, agentPresets: {
+      list: async () => [], standingKeyFor: async () => { throw new RangeError("preset standard not found") },
+    } }, warn))
+    await expect(view.presetToolNames("standard", { runId: "run-old", nodeId: "load_data" })).rejects.toMatchObject({ presetStage: "preset_scope_acquire_failed", reason: "preset standard not found" })
+    expect(schemas).not.toHaveBeenCalled()
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({ presetId: "standard", runId: "run-old", nodeId: "load_data", stage: "preset_scope_acquire_failed", errorType: "RangeError", reason: "preset standard not found" })
+  })
+
+  it.each([
+    [undefined, "preset_service_missing"],
+    [{ list: async () => [] }, "preset_api_unsupported"],
+    [{ standingKeyFor: async () => ({}) }, "preset_api_unsupported"],
+  ])("test_missing_preset_capabilities_%s_rejects_with_stage_%s", async (agentPresets, presetStage) => {
+    const view = new CordisToolsView(toolsViewCtx({ agentPresets, tools: { schemas: () => [] } }))
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ code: "WF_CHILD_TOOL_POLICY_FAILED", presetId: "standard", presetStage })
+  })
+
+  it.each([undefined, null, "standard", 0])("test_invalid_lease_key_%s_never_reads_global_schemas", async (key) => {
+    const schemas = vi.fn(() => [{ name: "global_only" }])
+    const dispose = vi.fn()
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas }, agentPresets: {
+      list: async () => [], acquireScope: async () => ({ key, [ASYNC_DISPOSE]: dispose }),
+    } }))
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ presetStage: "preset_scope_key_invalid" })
+    expect(schemas).not.toHaveBeenCalled()
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it("test_invalid_old_scope_key_rejects_before_read", async () => {
+    const read = vi.fn()
+    await expect(withPresetScope({ list: async () => [], standingKeyFor: async () => null }, "standard", read)).rejects.toMatchObject({ presetStage: "preset_scope_key_invalid" })
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it.each([null, undefined, {}])("test_invalid_schema_result_%s_rejects_and_releases", async (result) => {
+    const dispose = vi.fn()
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: () => result }, agentPresets: {
+      list: async () => [], acquireScope: async () => ({ key: {}, [ASYNC_DISPOSE]: dispose }),
+    } }))
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ presetStage: "preset_tool_schema_failed", errorType: "TypeError" })
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it("test_schema_exception_preserves_reason_and_releases_once", async () => {
+    const dispose = vi.fn()
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: () => { throw new RangeError("registry read failed") } }, agentPresets: {
+      list: async () => [], acquireScope: async () => ({ key: {}, [ASYNC_DISPOSE]: dispose }),
+    } }))
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ presetStage: "preset_tool_schema_failed", errorType: "RangeError", reason: "registry read failed" })
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it("test_empty_schemas_are_valid_and_repeated_reads_release_every_lease", async () => {
+    const dispose = vi.fn()
+    const acquireScope = vi.fn(async () => ({ key: {}, [ASYNC_DISPOSE]: dispose }))
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: () => [] }, agentPresets: { list: async () => [], acquireScope } }))
+    for (let i = 0; i < 5; i++) expect(await view.presetToolNames("standard")).toEqual([])
+    expect(acquireScope).toHaveBeenCalledTimes(5)
+    expect(dispose).toHaveBeenCalledTimes(5)
+  })
+
+  it("test_async_read_failure_releases_after_read_finishes", async () => {
+    const dispose = vi.fn()
+    await expect(withPresetScope({ list: async () => [], acquireScope: async () => ({ key: {}, [ASYNC_DISPOSE]: dispose }) }, "standard", async () => {
+      await Promise.resolve()
+      expect(dispose).not.toHaveBeenCalled()
+      throw new Error("async reader failed")
+    })).rejects.toMatchObject({ presetStage: "preset_tool_schema_failed", reason: "async reader failed" })
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it("test_diagnostics_redact_credentials_but_keep_original_error_type", async () => {
+    const warn = vi.fn()
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: () => [] }, agentPresets: {
+      list: async () => [], standingKeyFor: async () => { throw new TypeError("mount refused api_key=private-key Bearer private-bearer https://user:private-password@example.com/failed?token=private-query") },
+    } }, warn))
+    await expect(view.presetToolNames("standard")).rejects.toMatchObject({ errorType: "TypeError", presetStage: "preset_scope_acquire_failed" })
+    const diagnostic = warn.mock.calls[0]![0] as string
+    expect(diagnostic).toContain("mount refused")
+    expect(diagnostic).toContain("[redacted]")
+    for (const secret of ["private-key", "private-bearer", "private-password", "private-query"]) expect(diagnostic).not.toContain(secret)
+  })
+
+  it("test_visible_catalog_skips_failed_preset_with_diagnostic", async () => {
+    const key = {}
+    const warn = vi.fn()
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: (scope?: unknown) => scope === key ? [{ name: "read" }] : [{ name: "global_only" }] }, agentPresets: {
+      list: async () => [{ id: "broken" }, { id: "standard" }], standingKeyFor: async (id: string) => {
+        if (id === "broken") throw new Error("broken mount")
+        return key
+      },
+    } }, warn))
+    expect(await view.visibleToolNames()).toEqual(["global_only", "read"])
+    expect(JSON.parse(warn.mock.calls[0]![0])).toMatchObject({ presetId: "broken", stage: "preset_scope_acquire_failed", reason: "broken mount" })
+  })
+
+  it("test_old_preset_resolution_keeps_hidden_disabled_and_required_tool_rules", async () => {
+    const h = await makeHarness()
+    const key = {}
+    const view = new CordisToolsView(toolsViewCtx({ tools: { schemas: (scope?: unknown) => (scope === key ? ["read", "write", "subagent", ...CHILD_AGENT_HIDDEN_TOOLS] : ["global_only"]).map((name) => ({ name })) }, agentPresets: {
+      list: async () => [{ id: "standard" }], standingKeyFor: async () => key,
+    } }))
+    const node = agentNode("load_data", { presetId: "standard", execution: { requiredTools: ["read", "write"] } })
+    const input = { store: h.store, toolsView: view, sessionId: "session-1", flowId: "flow-1", node }
+    expect(await resolveAgentTools(input)).toEqual(["read", "write", "subagent"])
+    await expect(resolveAgentTools({ ...input, disabledTools: new Set(["write"]) })).rejects.toMatchObject({ code: "WF_CHILD_TOOL_POLICY_FAILED", message: expect.stringContaining("write") })
+    const empty = new CordisToolsView(toolsViewCtx({ tools: { schemas: () => [] }, agentPresets: { list: async () => [], standingKeyFor: async () => key } }))
+    await expect(resolveAgentTools({ ...input, toolsView: empty })).rejects.toMatchObject({ code: "WF_CHILD_TOOL_POLICY_FAILED", message: expect.stringContaining("read, write") })
   })
 })

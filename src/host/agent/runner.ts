@@ -10,12 +10,11 @@
 //
 // 白名单规则：
 // - combo：combo.tools ∩ 可见工具集（父代理）+ 所选 MCP 前缀工具；
-// - 官方 preset：agentPresets.acquireScope 取 standing scope 租约 → 工具名（无法解析则拒绝启动）；旧 minimal/ptc 硬编码正则被真实 preset 解析取代；
+// - 官方 preset：按服务能力读取 standing scope → 工具名（无法解析则拒绝启动）；
 // - 无强制追加：wf_ask/wf_ask_agent 仅组合勾选时进 allow（旧自动追加删除，PRD §4.4.2 规则 7）；
 // - wf_db_query 仅存在 db-in 连线时追加（§4.4.3 规则 5）；
 // - CHILD_AGENT_HIDDEN_TOOLS（wf_run_node/wf_run_node_wait/wf_finish + 自主编排两工具）永不进 allow，且 tools.restrict 显式 deny（双保险）。
 
-import type { Context } from '@deepseek-ai/cordis'
 import { readFile } from 'node:fs/promises'
 import { dbInEdges, parseExecutionContract } from '../graph/index.js'
 import type { FlowStore } from '../storage/flow-store.js'
@@ -173,18 +172,42 @@ interface ToolsServiceLike {
 /** agentPresets 服务最小结构（官方 preset standing scope 解析）。 */
 export interface AgentPresetsServiceLike {
   list(): Promise<unknown[]>
-  /**
-   * 取得某 preset 当前 revision 的 standing scope 租约（`{ key: ScopeKey }`）。
-   *
-   * 【0.1.7-rc.1 取证】官方 0.1.5-rc.3 的 `standingKeyFor(id)` 已被移除
-   * （dsh-agent-preset-registry/lib/types/index.d.ts L123-125 只保留 `acquireScope`；
-   * 全官方包 grep `standingKeyFor` 零命中）。返回值为**引用租约**
-   * （`{ key: ScopeKey } & AsyncDisposable`），读完后必须经 `Symbol.asyncDispose`
-   * 释放——实现是 `users--` 并触发 generation 回收（同包 lib/index.js L787-799），
-   * 不释放会让 preset standing scope 常驻不回收。官方同源范式见
-   * dsh-api-session-controller 的 `scopeFor(agentPreset)`。
-   */
-  acquireScope(id?: string): Promise<{ key: unknown } & object>
+  /** 新接口返回引用租约，读取后必须释放；运行时校验其 key。 */
+  acquireScope?(id?: string): Promise<{ key: unknown } & object>
+  /** 旧接口直接返回 ScopeKey，不拥有可释放租约。 */
+  standingKeyFor?(id?: string): Promise<unknown>
+}
+
+type PresetFailureStage = "preset_service_missing" | "preset_api_unsupported" | "preset_scope_acquire_failed" | "preset_scope_key_invalid" | "preset_tool_schema_failed" | "preset_scope_release_failed"
+interface PresetDiagnosticContext { runId?: string; nodeId?: string }
+
+function presetErrorReason(error: unknown): string {
+  let message: string
+  if (error instanceof Error) message = error.message
+  else if (typeof error === "string") message = error
+  else {
+    try {
+      message = JSON.stringify(error, (key, value: unknown) => /authorization|api[_-]?key|token|password|secret|credential/i.test(key) ? "[redacted]" : value) ?? String(error)
+    } catch { message = "无法序列化原始异常" }
+  }
+  return message
+    .replace(/Bearer\s+[^\s,;"']+/gi, "Bearer [redacted]")
+    .replace(/(authorization|api[_-]?key|token|password|secret)["']?\s*[:=]\s*["']?[^\s,;"']+/gi, "$1=[redacted]")
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@")
+    .replace(/(https?:\/\/[^\s?]+)\?[^\s]+/gi, "$1?[redacted]")
+    .slice(0, 1000)
+}
+
+class PresetScopeError extends ChildToolPermissionError {
+  readonly errorType: string
+  readonly reason: string
+  constructor(readonly presetId: string, readonly presetStage: PresetFailureStage, error: unknown) {
+    const reason = presetErrorReason(error)
+    super(`工具预设解析失败：${presetId} [${presetStage}] ${reason}`)
+    this.name = "PresetScopeError"
+    this.errorType = error instanceof Error ? error.name : error === null ? "null" : typeof error
+    this.reason = reason
+  }
 }
 
 /**
@@ -195,44 +218,87 @@ export interface AgentPresetsServiceLike {
 const ASYNC_DISPOSE_SYMBOL: symbol | undefined = (Symbol as unknown as { asyncDispose?: symbol }).asyncDispose
 
 /**
- * 释放 preset standing scope 租约（best-effort，幂等）。
- * 协议缺失或释放抛错都只跳过释放：清单读取属辅助路径，不得因回收失败而失败。
+ * 释放 preset standing scope 租约（best-effort；调用方负责只释放一次）。
+ * 回收失败记录诊断但不替代读取结果；不能据此改变已经解析的权限。
  */
-export async function releasePresetLease(lease: unknown): Promise<void> {
-  if (ASYNC_DISPOSE_SYMBOL === undefined) return
+export async function releasePresetLease(lease: unknown, onFailure?: (error: unknown) => void): Promise<void> {
   if (lease === null || typeof lease !== 'object') return
-  const disposer = (lease as Record<symbol, unknown>)[ASYNC_DISPOSE_SYMBOL]
-  if (typeof disposer !== 'function') return
   try {
+    const disposer = ASYNC_DISPOSE_SYMBOL === undefined ? undefined : (lease as Record<symbol, unknown>)[ASYNC_DISPOSE_SYMBOL]
+    if (typeof disposer !== "function") throw new TypeError("Preset 租约缺少 Symbol.asyncDispose 释放协议")
     await (disposer as () => unknown).call(lease)
-  } catch {
-    // 租约释放失败：引用计数至多多留一次，不影响本次清单读取的正确性
+  } catch (error) {
+    if (onFailure) onFailure(error)
+    else console.warn(JSON.stringify({ stage: "preset_scope_release_failed", reason: presetErrorReason(error) }))
   }
 }
 
 /**
- * 解析官方 agentPresets 服务（能力守卫的**单一来源**：GUI 目录端点与节点工具白名单
- * 解析共用；缺失或不支持 standing scope 取用时返回 null，由调用方决定降级语义）。
+ * 按公开能力识别 Preset 服务；缺失返回 null，不兼容的已注册服务明确报错。
  */
-export function agentPresetsServiceOf(ctx: { get(name: string): unknown }): AgentPresetsServiceLike | null {
-  const service: unknown = ctx.get('agentPresets')
+export function agentPresetsServiceOf(ctx: { get(name: string): unknown }, presetId = ""): AgentPresetsServiceLike | null {
+  const service: unknown = ctx.get("agentPresets")
+  if (service === null || service === undefined) return null
   if (
-    service !== null && typeof service === 'object'
-    && typeof (service as { list?: unknown }).list === 'function'
-    // standing scope 取用能力：0.1.7 起唯一通道是 acquireScope（见接口取证）
-    && typeof (service as { acquireScope?: unknown }).acquireScope === 'function'
+    typeof service === "object"
+    && typeof (service as { list?: unknown }).list === "function"
+    && (typeof (service as AgentPresetsServiceLike).acquireScope === "function"
+      || typeof (service as AgentPresetsServiceLike).standingKeyFor === "function")
   ) {
     return service as AgentPresetsServiceLike
   }
-  return null
+  throw new PresetScopeError(presetId, "preset_api_unsupported", "agentPresets 需要 list 和 acquireScope / standingKeyFor；请检查宿主 Preset 服务接口")
+}
+
+/** 使用真实 Preset Scope 完成读取；新版优先且失败不回退，旧版不执行租约释放。 */
+export async function withPresetScope<T>(presets: AgentPresetsServiceLike, presetId: string, read: (scopeKey: object) => Promise<T> | T, onReleaseFailure?: (error: unknown) => void): Promise<T> {
+  const readKey = async (key: unknown): Promise<T> => {
+    // ScopeKey 是对象身份，undefined 会让 schemas 读取全局层，不能作为降级值。
+    if (key === null || (typeof key !== "object" && typeof key !== "function")) {
+      throw new PresetScopeError(presetId, "preset_scope_key_invalid", `Preset 返回无效 ScopeKey（${key === null ? "null" : typeof key}）`)
+    }
+    try { return await read(key) } catch (error) {
+      throw new PresetScopeError(presetId, "preset_tool_schema_failed", error)
+    }
+  }
+  if (typeof presets.acquireScope === "function") {
+    let lease: unknown
+    try { lease = await presets.acquireScope(presetId) } catch (error) {
+      throw new PresetScopeError(presetId, "preset_scope_acquire_failed", error)
+    }
+    try {
+      if (lease === null || typeof lease !== "object") {
+        throw new PresetScopeError(presetId, "preset_scope_key_invalid", "acquireScope 未返回有效租约对象")
+      }
+      let key: unknown
+      try { key = (lease as { key?: unknown }).key } catch (error) {
+        throw new PresetScopeError(presetId, "preset_scope_key_invalid", error)
+      }
+      return await readKey(key)
+    } finally {
+      await releasePresetLease(lease, (error) => {
+        const failure = new PresetScopeError(presetId, "preset_scope_release_failed", error)
+        if (onReleaseFailure) onReleaseFailure(failure)
+        else console.warn(JSON.stringify({ presetId, stage: failure.presetStage, errorType: failure.errorType, reason: failure.reason }))
+      })
+    }
+  }
+  if (typeof presets.standingKeyFor === "function") {
+    let key: unknown
+    try { key = await presets.standingKeyFor(presetId) } catch (error) {
+      throw new PresetScopeError(presetId, "preset_scope_acquire_failed", error)
+    }
+    return readKey(key)
+  }
+  throw new PresetScopeError(presetId, "preset_api_unsupported", "agentPresets 缺少 acquireScope / standingKeyFor；无法安全解析工具白名单")
 }
 
 /** 工具视图缝（白名单解析依赖；CordisToolsView 为真实实现，单测 fake）。 */
 export interface ToolsView {
   /** 全部可见工具名（全局层 ∪ 存活 agent scope ∪ preset standing scope）。 */
   visibleToolNames(sessionId?: string): Promise<string[]>
-  /** 官方 preset 的 standing scope 工具名；服务缺失返回 null（调用方回退）。 */
-  presetToolNames(presetId: string): Promise<string[] | null>
+  /** 官方 preset 工具名；解析失败必须拒绝启动，不扩大授权。 */
+  presetToolNames(presetId: string, diagnostic?: PresetDiagnosticContext): Promise<string[] | null>
   /** 当前会话父代理工具视图，仅供枚举；创建权限必须由实际 child scope 裁决。 */
   agentToolNames(sessionId?: string): Promise<string[]>
 }
@@ -244,7 +310,7 @@ export interface ToolsView {
  * （Cordis Context）——schemas(scope) 按 scope key 查找，传错必然只能看到全局层。
  */
 export class CordisToolsView implements ToolsView {
-  constructor(private readonly ctx: Context) {}
+  constructor(private readonly ctx: { get(name: string): unknown; logger?: { warn(message: string): unknown } }) {}
 
   private toolsService(): ToolsServiceLike | null {
     const service: unknown = this.ctx.get('tools')
@@ -262,8 +328,51 @@ export class CordisToolsView implements ToolsView {
     return null
   }
 
-  private agentPresetsService(): AgentPresetsServiceLike | null {
-    return agentPresetsServiceOf(this.ctx)
+  private logPresetFailure(error: unknown, presetId: string, diagnostic: PresetDiagnosticContext = {}): void {
+    const failure = error instanceof PresetScopeError ? error : new PresetScopeError(presetId, "preset_api_unsupported", error)
+    this.ctx.logger?.warn(JSON.stringify({ ...diagnostic, code: failure.code, presetId: failure.presetId, phase: failure.phase, stage: failure.presetStage, errorType: failure.errorType, reason: failure.reason }))
+  }
+
+  /** 目录枚举允许跳过单个失败预设；与节点执行共用 Scope 获取和 schema 校验。 */
+  async allPresetToolSchemas(): Promise<unknown[]> {
+    let items: unknown[]
+    try {
+      const service = agentPresetsServiceOf(this.ctx)
+      if (!service) throw new PresetScopeError("", "preset_service_missing", "agentPresets 服务未注册；请启用宿主 Preset 插件")
+      items = await service.list()
+      if (!Array.isArray(items)) throw new Error("agentPresets.list() 未返回数组")
+    } catch (error) {
+      this.logPresetFailure(error, "")
+      return []
+    }
+    const out: unknown[] = []
+    for (const item of items) {
+      const presetId = String((item as { id?: unknown })?.id ?? "").trim()
+      if (!presetId) continue
+      try { out.push(...await this.presetToolSchemas(presetId)) } catch {
+        // presetToolSchemas 已记录诊断；目录继续枚举其他预设。
+      }
+    }
+    return out
+  }
+
+  /** 节点执行与目录使用相同的读取规则；失败携带稳定权限错误码和细分诊断。 */
+  async presetToolSchemas(presetId: string, diagnostic: PresetDiagnosticContext = {}): Promise<unknown[]> {
+    try {
+      const presets = agentPresetsServiceOf(this.ctx, presetId)
+      if (!presets) throw new PresetScopeError(presetId, "preset_service_missing", "agentPresets 服务未注册；请启用宿主 Preset 插件")
+      const tools = this.toolsService()
+      if (!tools) throw new PresetScopeError(presetId, "preset_tool_schema_failed", "tools.schemas 不可用；请启用宿主工具服务")
+      return await withPresetScope(presets, presetId, (key) => {
+        const schemas = tools.schemas(key)
+        if (!Array.isArray(schemas)) throw new TypeError("tools.schemas(scopeKey) 未返回数组")
+        return schemas
+      }, (error) => this.logPresetFailure(error, presetId, diagnostic))
+    } catch (error) {
+      const failure = error instanceof PresetScopeError ? error : new PresetScopeError(presetId, "preset_api_unsupported", error)
+      this.logPresetFailure(failure, presetId, diagnostic)
+      throw failure
+    }
   }
 
   async visibleToolNames(sessionId?: string): Promise<string[]> {
@@ -300,53 +409,18 @@ export class CordisToolsView implements ToolsView {
         }
         for (const agent of candidates) collect(agent)
       }
-      // agent preset 的 standing scope key（无存活会话时也能列全各 preset 工具）。
-      // 0.1.7-rc.1：经 acquireScope 取租约，用完必须释放（见接口取证）。
-      const presets = this.agentPresetsService()
-      if (presets) {
-        try {
-          const items = await presets.list()
-          for (const item of items ?? []) {
-            const pid = String((item as { id?: unknown })?.id ?? '').trim()
-            if (!pid) continue
-            try {
-              const lease = await presets.acquireScope(pid)
-              try {
-                if (lease?.key !== undefined) collect(lease.key)
-              } finally {
-                await releasePresetLease(lease)
-              }
-            } catch {
-              // 单个 preset 失败跳过
-            }
-          }
-        } catch {
-          // agentPresets 不可用
-        }
+      for (const schema of await this.allPresetToolSchemas()) {
+        const name = String((schema as { name?: unknown; title?: unknown })?.name ?? (schema as { title?: unknown })?.title ?? "")
+        if (name) out.add(name)
       }
     }
     return [...out]
   }
 
-  async presetToolNames(presetId: string): Promise<string[] | null> {
-    const tools = this.toolsService()
-    const presets = this.agentPresetsService()
-    if (!tools || !presets) return null
-    let lease: unknown
-    try {
-      lease = await presets.acquireScope(presetId)
-      const key = (lease as { key?: unknown } | null | undefined)?.key
-      if (key === undefined) return null
-      const list = (tools.schemas(key) ?? []) as unknown[]
-      return (Array.isArray(list) ? list : [])
-        .map((schema) => String((schema as { name?: unknown; title?: unknown })?.name ?? (schema as { title?: unknown })?.title ?? ''))
-        .filter(Boolean)
-    } catch {
-      return null
-    } finally {
-      // 无论成功失败都释放租约（best-effort；见 AcquireScope 取证）
-      await releasePresetLease(lease)
-    }
+  async presetToolNames(presetId: string, diagnostic?: PresetDiagnosticContext): Promise<string[]> {
+    return (await this.presetToolSchemas(presetId, diagnostic))
+      .map((schema) => String((schema as { name?: unknown; title?: unknown })?.name ?? (schema as { title?: unknown })?.title ?? ""))
+      .filter(Boolean)
   }
 
   async agentToolNames(sessionId?: string): Promise<string[]> {
@@ -381,6 +455,7 @@ export interface ResolveToolsInput {
   toolsView: ToolsView
   sessionId: string
   flowId: string
+  runId?: string
   /** 已解析为主节点的角色节点（虚拟节点在 T-021 已解析）。 */
   node: RoleNode
   /**
@@ -430,11 +505,11 @@ const TEAM_BLOCKED_ALLOW_TOOLS: readonly string[] = TEAM_TOOL_NAMES
  */
 export async function resolveAgentTools(input: ResolveToolsInput): Promise<string[]> {
   const presetId = String(input.node.data?.presetId ?? '').trim()
-  const visible = await input.toolsView.visibleToolNames(input.sessionId)
   let allow: string[]
   if (!presetId) {
     allow = []
   } else if (presetId.startsWith('combo-')) {
+    const visible = await input.toolsView.visibleToolNames(input.sessionId)
     const combos = await input.store.listToolCombos().catch(() => [])
     const combo = combos.find((item) => item.id === presetId)
     if (!combo) throw new Error(`工具组合不存在：${presetId}（请重新选择模式）`)
@@ -448,7 +523,7 @@ export async function resolveAgentTools(input: ResolveToolsInput): Promise<strin
     }
     allow = [...new Set(allow)]
   } else {
-    const presetNames = await input.toolsView.presetToolNames(presetId)
+    const presetNames = await input.toolsView.presetToolNames(presetId, { runId: input.runId, nodeId: input.node.id })
     if (presetNames === null) throw new ChildToolPermissionError(`无法解析工具预设：${presetId}（请确认宿主支持该预设，或选择现有工具组合）`)
     allow = presetNames
   }
@@ -686,6 +761,7 @@ export class NodeAgentRunner implements NodeRunner {
       toolsView: this.deps.toolsView,
       sessionId: input.sessionId,
       flowId: input.flowId,
+      runId: input.runId,
       node,
       disabledTools: await this.deps.toolSwitches?.(),
       ...(input.mode ? { mode: input.mode } : {}),

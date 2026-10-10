@@ -1,22 +1,38 @@
 // Live DSH acceptance, using configured model credentials in the DSH host.
 // This script creates a reviewable test session/flow, never approves experience cards.
 import assert from "node:assert/strict"
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises"
-import { resolve } from "node:path"
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { join, resolve } from "node:path"
+import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 
+if (process.argv.includes("--help")) {
+  console.log(`Run inside the DSH container, or on a machine sharing its workspace filesystem.
+Required: DSH_BASE_URL, DSH_TEST_PROVIDER, DSH_TEST_MODEL (exact DSH routing identifiers).
+Optional: DSH_WEB_LOG (local DSH web log used for authentication; never printed),
+DSH_TEST_WORKSPACE (fresh host-visible directory), SALES_CSV, DSH_TEST_TIMEOUT_MS.
+--prepare-only creates a test session and workflow without starting any model run;
+only DSH_BASE_URL is required in this mode. --help has no side effects.
+This script checks real child IDs, node settlement, artifacts and report contents.
+Mock checks do not constitute a real Docker/model E2E result.`)
+  process.exit(0)
+}
+const origin = process.env.DSH_BASE_URL
+assert.ok(origin, "Set DSH_BASE_URL to the actual DSH web endpoint")
+assert.ok(["http:", "https:"].includes(new URL(origin).protocol), "DSH_BASE_URL must use HTTP or HTTPS")
 const provider = process.env.DSH_TEST_PROVIDER
 const model = process.env.DSH_TEST_MODEL
 const prepareOnly = process.argv.includes("--prepare-only")
 assert.ok(prepareOnly || (provider && model), "Set DSH_TEST_PROVIDER and DSH_TEST_MODEL to configured DSH routing names; credentials remain in DSH settings")
-const workspace = resolve(process.env.DSH_TEST_WORKSPACE ?? `/workspace/.cloud-env/sales-live-${Date.now()}`)
+const timeoutMs = Number(process.env.DSH_TEST_TIMEOUT_MS ?? 600000)
+assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, "DSH_TEST_TIMEOUT_MS must be positive")
+const workspace = resolve(process.env.DSH_TEST_WORKSPACE ?? await mkdtemp(join(tmpdir(), "dsh-sales-live-")))
 const sourceCsv = resolve(process.env.SALES_CSV ?? fileURLToPath(new URL("../tests/fixtures/sales_workflow_test.csv", import.meta.url)))
 await readFile(sourceCsv, "utf8") // actual input must be readable in the same host filesystem
 await mkdir(workspace, { recursive: true })
 await mkdir(resolve(workspace, "output"), { recursive: true })
 const csv = resolve(workspace, "sales_workflow_test.csv")
 if (sourceCsv !== csv) await copyFile(sourceCsv, csv)
-const origin = process.env.DSH_BASE_URL ?? "http://127.0.0.1:3081"
 const login = new URL("/", origin)
 const token = process.env.DSH_WEB_LOG ? (await readFile(process.env.DSH_WEB_LOG, "utf8")).match(/[?&]token=([^\s&]+)/)?.[1] : undefined
 if (token) login.searchParams.set("token", token)
@@ -66,7 +82,7 @@ if (prepareOnly) {
 }
 const { runId } = await api("run", { sessionId, flowId, fileBindings: { csv: [csv] } })
 console.log(JSON.stringify({ phase: "started", runId, sessionId, flowId, provider, model, workspace }))
-const deadline = Date.now() + Number(process.env.DSH_TEST_TIMEOUT_MS ?? 600000)
+const deadline = Date.now() + timeoutMs
 let snapshot
 let progress = ""
 while (Date.now() < deadline) {

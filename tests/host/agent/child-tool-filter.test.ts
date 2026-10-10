@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createChildToolFilterSetup, installChildToolPolicy } from "../../../src/host/agent/child-tool-filter.js"
+import { CordisToolsView } from "../../../src/host/agent/runner.js"
 
 function scope(inherited = ["read", "write", "mcp__server__read"], own = ["send_message", "custom"]) {
   const guards: Array<(execution: { name: string }) => string | undefined> = []
@@ -21,6 +22,42 @@ function scope(inherited = ["read", "write", "mcp__server__read"], own = ["send_
 }
 
 describe("child scope permissions", () => {
+  it.each(["standingKeyFor", "acquireScope"] as const)("test_preset_%s_creation_restore_and_disposal_keep_permissions_closed", async (method) => {
+    const child = scope()
+    const key = {}
+    let released = 0
+    const asyncDispose = (Symbol as unknown as { asyncDispose: symbol }).asyncDispose
+    const presets = {
+      list: async () => [{ id: "standard" }],
+      [method]: async () => method === "standingKeyFor" ? key : { key, [asyncDispose]: async () => { released++ } },
+    }
+    const view = new CordisToolsView({ get: (name) => name === "agentPresets" ? presets : {
+      schemas: (scopeKey: unknown) => scopeKey === key ? ["read", "write", "subagent", "wf_run_node", "wf_finish"].map((name) => ({ name })) : [],
+    } })
+    const allow = await view.presetToolNames("standard")
+    const setup = createChildToolFilterSetup()
+    const dispose = await setup.withPending(allow, async () => setup.contribution(child.context))
+    setup.remember("child-standard", allow)
+    expect(child.masks).toEqual([{ allow: ["read", "write"] }])
+    expect(child.denied("read")).toBe(false)
+    expect(child.denied("write")).toBe(false)
+    expect(child.denied("wf_run_node")).toBe(true)
+    expect(child.denied("wf_finish")).toBe(true)
+    expect(child.denied("custom")).toBe(true)
+    expect(released).toBe(method === "acquireScope" ? 1 : 0)
+    dispose()
+    expect(child.masks).toEqual([])
+    expect(child.guards).toEqual([])
+    const restored = setup.restore("child-standard", child.context)
+    expect(child.denied("wf_finish")).toBe(true)
+    expect(child.denied("custom")).toBe(true)
+    restored()
+    setup.remember("child-standard", undefined)
+    expect(child.masks).toEqual([])
+    expect(child.guards).toEqual([])
+    expect(setup.peekPending?.()).toBeUndefined()
+  })
+
   it("test_standard_scope_root_only_subagent_is_not_restricted", () => {
     const child = scope()
     installChildToolPolicy(child.context, ["read", "subagent", "mcp__server__read", "custom"])

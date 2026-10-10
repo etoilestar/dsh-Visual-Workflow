@@ -13,6 +13,7 @@ export interface GroupMemberToolsInput {
     toolsView: ToolsView;
     sessionId: string;
     flowId: string;
+    runId?: string;
     node: RoleNode;
     disabledTools?: ReadonlySet<string>;
     mode?: 'mode1' | 'mode2';
