@@ -35,6 +35,7 @@ export declare function buildNodeBlocks(input: {
      * 协作通道（仅组内成员有意义）：official = 官方 Agent Team 邮箱；legacy = 插件自建协作工具。
      * 缺省 legacy，保持未启用官方团队时的文案与行为。
      */
+    effectiveInputs?: import("../shared/runtime-types.js").InputSlots;
     collabChannel?: CollabChannel;
 }): Array<{
     type: 'text';

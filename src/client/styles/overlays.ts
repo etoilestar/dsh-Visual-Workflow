@@ -5,6 +5,14 @@
 // 本文件内规则顺序即覆盖顺序（同特异性下后写的覆盖先写的），禁止重排。
 
 export const overlaysStyles = `
+.wf-runtime-inputs__fields { display: grid; gap: 8px; border: 0; padding: 12px 0; }
+.wf-runtime-inputs__fields label { display: grid; gap: 4px; color: var(--wf-ink); }
+.wf-runtime-inputs__fields input, .wf-runtime-inputs__fields textarea, .wf-runtime-inputs__fields select { color: var(--wf-ink); background: var(--wf-bg); border: 1px solid var(--wf-border-strong); padding: 6px; }
+.wf-runtime-inputs__fields textarea { min-height: 72px; resize: vertical; }
+.wf-runtime-inputs__fields li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.wf-runtime-inputs .wf-runtime-inputs__error { color: var(--wf-warn); }
+.wf-runtime-bind-control { position: absolute; z-index: 30; right: 16px; bottom: 16px; }
+
 /* ---- 二次确认弹层 ---- */
 .wf-confirm-backdrop {
   position: absolute;

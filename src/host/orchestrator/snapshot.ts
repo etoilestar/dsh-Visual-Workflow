@@ -148,7 +148,7 @@ export function setNodeStatus(snapshot: RunSnapshot, nodeId: string, status: Nod
     delete entry.childId
     if (options.attempts !== undefined) {
       entry.attemptHistory ??= []
-      entry.attemptHistory.push({ attempt: options.attempts, phase: "child_start", status, startedAt: entry.startedAt })
+      entry.attemptHistory.push({ runId: snapshot.id, attempt: options.attempts, phase: "child_start", status, startedAt: entry.startedAt })
     }
   }
   if (options.failure !== undefined) entry.failure = structuredClone(options.failure)

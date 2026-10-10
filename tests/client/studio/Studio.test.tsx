@@ -57,6 +57,11 @@ function remoteStub(): RemoteFace & { calls: Array<{ endpoint: string; args: Rec
         return [{ id: 'run-9', flowId: 'x', status: 'interrupted', startedAt: '2026-08-23T10:00:00.000Z', summary: '中断于节点' }]
       }
       if (endpoint === EP.EP_RUN_RESUME) return { runId: 'run-10' }
+      if (endpoint === EP.EP_RUNTIME_INPUT_OPTIONS) return { nodeInputs: {}, files: [], handoffPolicy: "explicit" }
+      if (endpoint === EP.EP_RUN_STATUS) {
+        const saved = [...calls].reverse().find((call) => call.endpoint === EP.EP_PUT_WORKFLOW)?.args.flow as { id: string }
+        return { id: "run-9", flowId: saved.id, status: "interrupted", nodes: [] }
+      }
       if (endpoint === EP.EP_ACTIVE_RUNS) return [] // 无活跃 run（默认）
       if (endpoint === EP.EP_LIST_WORKFLOWS) return [] // 无实例（默认；自动选中保持空白画布）
       if (endpoint === EP.EP_PUT_WORKFLOW || endpoint === EP.EP_PUT_FLOW_TEMPLATE) {
@@ -101,6 +106,32 @@ function libTab(label: string): HTMLButtonElement | undefined {
 }
 
 describe('Studio 装配', () => {
+  it.each([false, true])("test_existing_instance_run_configure_%s_uses_existing_controls", async (configure) => {
+    const remote = remoteStub()
+    const call = remote.call
+    remote.call = async (endpoint, args) => {
+      if (endpoint === EP.EP_LIST_WORKFLOWS) return [{ id: "existing", sessionId: "s-1", mode: "mode1", name: "Existing", revision: 1, nodes: [{ id: "start", kind: "start", position: { x: 0, y: 0 }, data: { label: "Start" } }, { id: "end", kind: "end", position: { x: 200, y: 0 }, data: { label: "End" } }], lines: [] }]
+      return call(endpoint, args)
+    }
+    await renderStudioWith(remote)
+    const selector = configure ? ".wf-runtime-bind-control button" : ".wf-toolbar button"
+    const label = configure ? zh.runtimeConfigureRun : zh.run
+    const button = Array.from(document.querySelectorAll<HTMLButtonElement>(selector)).find((item) => item.textContent === label)
+    expect(button?.textContent).toBe(label)
+    await act(async () => { button!.click() })
+    if (configure) {
+      expect(document.querySelector(".wf-runtime-inputs")?.textContent).toContain(zh.runtimeInputsTitle)
+      expect(remote.calls.some((entry) => entry.endpoint === EP.EP_RUN)).toBe(false)
+      const policy = Array.from(document.querySelectorAll<HTMLSelectElement>(".wf-runtime-inputs select")).find((item) => item.querySelector('option[value="auto"]'))!
+      await act(async () => { policy.value = "auto"; policy.dispatchEvent(new Event("change", { bubbles: true })) })
+      await act(async () => { document.querySelector<HTMLButtonElement>(".wf-runtime-inputs .is-primary")!.click() })
+      expect(remote.calls.find((entry) => entry.endpoint === EP.EP_RUN)?.args).toMatchObject({ handoffPolicy: "auto" })
+    } else {
+      expect(document.querySelector(".wf-runtime-inputs")).toBeNull()
+      expect(remote.calls.find((entry) => entry.endpoint === EP.EP_RUN)?.args).toEqual({ sessionId: "s-1", flowId: "existing" })
+    }
+  })
+
   it('标题顶栏 = 工作流设计器一行（无额外标题栏）；导入/导出/模式/组合/关闭按钮', async () => {
     await renderStudio()
     expect(textOf('.wf-titlebar__title')).toEqual(['工作流设计器'])
@@ -261,8 +292,10 @@ describe('Studio 交互', () => {
     expect(document.querySelector('.wf-titlebar__mode')?.textContent).toContain(zh.mode1)
   })
 
-  it('运行历史：interrupted 记录可恢复；点击恢复触发 runResume', async () => {
+  it('运行历史：interrupted 记录可恢复；必需输入弹窗确认后触发 runResume', async () => {
     const remote = remoteStub()
+    const call = remote.call
+    remote.call = async (endpoint, args) => endpoint === EP.EP_RUNTIME_INPUT_OPTIONS ? { nodeInputs: { first: { source: { kind: 'text', required: true } } }, files: [], handoffPolicy: 'explicit' } : call(endpoint, args)
     await renderStudioWith(remote)
     await createDraft()
     // 图2 改造：+ 号新建模板草稿；运行历史属于实例——先「创建实例」切到实例态
@@ -289,6 +322,9 @@ describe('Studio 交互', () => {
     await act(async () => {
       resumeButton?.click()
     })
+    expect(remote.calls.some((call) => call.endpoint === EP.EP_RUN_RESUME)).toBe(false)
+    expect(document.querySelector(".wf-runtime-inputs")?.textContent).toContain(zh.runtimeInputsTitle)
+    await act(async () => { document.querySelector<HTMLButtonElement>(".wf-runtime-inputs .is-primary")?.click() })
     const resume = remote.calls.find((call) => call.endpoint === EP.EP_RUN_RESUME)
     expect(resume).toBeTruthy()
     expect(resume?.args).toMatchObject({ sessionId: 's-1', runId: 'run-9' })

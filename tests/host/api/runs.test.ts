@@ -6,10 +6,31 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
+import { writeFile } from "node:fs/promises"
 import { DatabaseSync } from 'node:sqlite'
 import { cleanupAll, databaseNode, makeFlow, makeHarness, saveFlow } from './fixtures/api-harness.js'
 
 afterEach(cleanupAll)
+
+it("test_input_options_hide_attachment_path_and_binding_uses_current_session_resolution", async () => {
+  let path = ""
+  const file = { attachmentId: "admitted", name: "input.txt", bytes: 4 }
+  const h = await makeHarness({ sessionInputFiles: async (sessionId) => sessionId === "session-1" ? [{ ...file, path }] : [] })
+  path = join(h.dataDir, "host-private-location.txt")
+  await writeFile(path, "data")
+  await saveFlow(h)
+  const options = await h.api.handle("runtimeInputOptions", { sessionId: "session-1", flowId: "flow-1" }) as { files: unknown[] }
+  expect(options.files).toEqual([file])
+  expect(JSON.stringify(options)).not.toContain(path)
+  await h.api.handle("run", { sessionId: "session-1", flowId: "flow-1" })
+  const binding = { sessionId: "session-1", runId: "run-1", nodeId: "n-a2", expectedRevision: 0, inputs: { source: [{ kind: "file", fileRef: { source: "attachment", ...file } }] } }
+  await h.api.handle("runInputBind", binding)
+  expect(h.runtime.runSnapshot("run-1")?.runtimeInputs?.nodeInputs["n-a2"].source[0]).toMatchObject({ fileRef: { path } })
+  binding.expectedRevision = 1
+  await h.api.handle("runInputBind", { ...binding, inputs: { source: [{ kind: "file", fileRef: { source: "attachment", ...file, path: "/forged/host/path" } }] } })
+  expect(h.runtime.runSnapshot("run-1")?.runtimeInputs?.nodeInputs["n-a2"].source[0]).toMatchObject({ fileRef: { path } })
+  await expect(h.api.handle("runInputBind", { ...binding, sessionId: "other", expectedRevision: 2 })).rejects.toMatchObject({ code: "WF_NOT_FOUND" })
+})
 
 describe('运行端点', () => {
   it('run 无断点全新启动；有断点自动续跑（resumedFromRunId）', async () => {
@@ -171,4 +192,31 @@ describe('导入导出端点', () => {
     expect((await h.store.listWorkflows('session-1')).length).toBe(1)
     expect((await h.store.listFlowTemplates()).length).toBe(1)
   })
+})
+
+it("test_run_input_API_preserves_inputs_policy_pending_binding_and_resume_replacement", async () => {
+  const h = await makeHarness()
+  await saveFlow(h)
+  const { EP_RUN, EP_RUN_RESUME, EP_RUN_INPUT_BIND, EP_RUNTIME_INPUT_OPTIONS } = await import("../../../src/host/shared/protocol.js")
+  const runtimeInputs = { workflowInputs: { source: [{ kind: "text", value: "initial" }] }, nodeInputs: {} }
+  await h.api.handle(EP_RUN, { sessionId: "session-1", flowId: "flow-1", runtimeInputs, handoffPolicy: "auto" })
+  expect(h.runtime.runSnapshot("run-1")).toMatchObject({ runtimeInputs, handoffPolicy: "auto", inputRevision: 1 })
+  const options = await h.api.handle(EP_RUNTIME_INPUT_OPTIONS, { sessionId: "session-1", flowId: "flow-1" }) as import("../../../src/host/shared/runtime-types.js").RuntimeInputOptions
+  expect(Object.keys(options.nodeInputs)).toContain("n-a2")
+  await h.api.handle(EP_RUN_INPUT_BIND, { sessionId: "session-1", runId: "run-1", nodeId: "n-a2", expectedRevision: 1, inputs: { x: [{ kind: "json", value: { value: 2 } }] } })
+  expect(h.runtime.runSnapshot("run-1")?.inputRevision).toBe(2)
+  await h.runtime.stopRun("run-1")
+  await h.api.handle(EP_RUN_RESUME, { sessionId: "session-1", flowId: "flow-1", runId: "run-1", runtimeInputs: { workflowInputs: { source: [{ kind: "text", value: "replacement" }] }, nodeInputs: {} }, handoffPolicy: "explicit" })
+  expect(h.runtime.runSnapshot("run-2")).toMatchObject({ inputRevision: 3, handoffPolicy: "explicit", runtimeInputs: { workflowInputs: { source: [{ value: "replacement" }] } } })
+})
+
+it("test_pending_binding_API_rejects_missing_fields_and_cross_session_ownership", async () => {
+  const h = await makeHarness()
+  await saveFlow(h)
+  const { EP_RUN, EP_RUN_INPUT_BIND, EP_RUNTIME_INPUT_OPTIONS } = await import("../../../src/host/shared/protocol.js")
+  await h.api.handle(EP_RUN, { sessionId: "session-1", flowId: "flow-1" })
+  await expect(h.api.handle(EP_RUN_INPUT_BIND, { sessionId: "session-1", runId: "run-1", nodeId: "n-a2" })).rejects.toMatchObject({ status: 400 })
+  await expect(h.api.handle(EP_RUNTIME_INPUT_OPTIONS, { sessionId: "session-1" })).rejects.toMatchObject({ status: 400 })
+  await expect(h.api.handle(EP_RUN_INPUT_BIND, { sessionId: "other", runId: "run-1", nodeId: "n-a2", expectedRevision: 0, inputs: {} })).rejects.toMatchObject({ code: "WF_NOT_FOUND" })
+  expect(h.runtime.runSnapshot("run-1")?.inputRevision).toBeUndefined()
 })

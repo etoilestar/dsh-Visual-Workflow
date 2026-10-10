@@ -109,6 +109,8 @@ export const EP_TOOL_SWITCH_PUT = 'toolSwitchPut'
 export const EP_TOOL_SWITCH_PUT_MANY = 'toolSwitchPutMany'
 
 /** 运行启动端点名。 */
+export const EP_RUNTIME_INPUT_OPTIONS = "runtimeInputOptions"
+export const EP_RUN_INPUT_BIND = "runInputBind"
 export const EP_RUN = 'run'
 /** 运行状态轮询端点名。 */
 export const EP_RUN_STATUS = 'runStatus'

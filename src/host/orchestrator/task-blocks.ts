@@ -57,6 +57,7 @@ export function buildNodeBlocks(input: {
    * 协作通道（仅组内成员有意义）：official = 官方 Agent Team 邮箱；legacy = 插件自建协作工具。
    * 缺省 legacy，保持未启用官方团队时的文案与行为。
    */
+  effectiveInputs?: import("../shared/runtime-types.js").InputSlots
   collabChannel?: CollabChannel
 }): Array<{ type: 'text'; text: string }> {
   const { flow, node } = input
@@ -78,6 +79,7 @@ export function buildNodeBlocks(input: {
     facts: {
       nodeLabel: data.label || node.id,
       upstreamContext,
+      runtimeInputs: input.effectiveInputs,
       filePaths,
       workingDirectory: input.snapshot.workingDirectory,
       inputSource: execution.inputSource,
@@ -94,5 +96,5 @@ export function buildNodeBlocks(input: {
   // 协作组成员：把成员清单块（含成员标识 + 角色名 + 自定义说明）追加到首条用户消息。
   // 协作信息不作为系统提示词段注入，只进用户消息。
   const collabBlock = collabBlockOf(flow, node.id, input.collabChannel ?? 'legacy')
-  return [{ type: 'text', text: collabBlock ? `${text}\n\n${collabBlock}` : text }]
+  return [{ type: "text", text: collabBlock ? `${text}\n\n${collabBlock}` : text }]
 }

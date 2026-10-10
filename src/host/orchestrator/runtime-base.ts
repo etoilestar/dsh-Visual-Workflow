@@ -755,6 +755,7 @@ export abstract class RuntimeBase {
 
   /** 持久化 run 快照（尽力而为：失败仅告警，不阻断状态机）。 */
   protected async persistWarn(entry: RunEntry): Promise<void> {
+    if (entry.inputBindingDone) await entry.inputBindingDone
     try {
       await this.deps.store.saveRun(entry.snapshot)
     } catch (error) {

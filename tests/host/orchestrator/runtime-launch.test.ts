@@ -222,6 +222,7 @@ describe('startRun 启动与运行锁', () => {
     h.agents.injectFail = new Error('注入失败')
     await expect(h.runtime.startRun({ sessionId: 'session-1', flowId: 'flow-1' })).rejects.toMatchObject({ code: 'WF_INJECT_FAILED' })
     expect(h.runtime.activeRunForSession('session-1')).toBeNull()
+    expect((await h.store.getRun("run-1"))?.status).toBe("failed")
   })
 })
 

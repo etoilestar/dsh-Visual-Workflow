@@ -13,10 +13,13 @@ export declare function managedFilePath(dataDir: string, name: string): string;
  * 并发语义：同一目标的写入先经进程内锁串行化，再交给通用原子原语发布
  * （临时文件 + fsync + rename + 失败清理都由原语负责）。
  */
+/** Runtime uploads use a reserved namespace, not caller authorization; ordinary template files retain their existing names. */
+export declare function runtimeManagedPrefix(sessionId: string): string;
 export declare function copyIntoManagedFile(dataDir: string, input: {
     name: string;
     base64?: string;
     sourcePath?: string;
+    sessionId?: string;
 }): Promise<{
     managedPath: string;
     fileName: string;

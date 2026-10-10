@@ -41,3 +41,13 @@ describe('copyIntoManagedFile 并发原子发布', () => {
     expect(leftovers).toEqual([])
   })
 })
+it("test_runtime_upload_session_namespace_separates_same_names_and_rejects_unscoped_forgery", async () => {
+  const dir = await tempDir()
+  const first = await copyIntoManagedFile(dir, { sessionId: "one", name: "same.txt", base64: Buffer.from("one").toString("base64") })
+  const second = await copyIntoManagedFile(dir, { sessionId: "two", name: "same.txt", base64: Buffer.from("two").toString("base64") })
+  expect(first.managedPath).not.toBe(second.managedPath)
+  expect(await readFile(join(dir, first.managedPath), "utf8")).toBe("one")
+  expect(await readFile(join(dir, second.managedPath), "utf8")).toBe("two")
+  await expect(copyIntoManagedFile(dir, { name: first.fileName, base64: Buffer.from("forged").toString("base64") })).rejects.toMatchObject({ code: "WF_INPUT_FILE_UNAUTHORIZED" })
+  expect(await readFile(join(dir, first.managedPath), "utf8")).toBe("one")
+})

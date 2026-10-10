@@ -28,6 +28,7 @@ export interface NodeTaskBlockParams {
         workingDirectory?: string;
         inputSource?: 'ctx' | 'workspace' | 'runtime';
         outputFiles?: string[];
+        runtimeInputs?: import("../shared/runtime-types.js").InputSlots;
         /**
          * 数据库工具说明：存在 db-in 连线时说明 wf_db_query 三模式（search/query/schema，
          * 只读）用法；无 db-in 连线时为空字符串。

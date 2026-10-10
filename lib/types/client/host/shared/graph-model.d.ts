@@ -1,3 +1,4 @@
+import type { InputRequirement } from "./runtime-types.js";
 import type { OrgMeta } from './org-meta.js';
 /** 节点种类：9 种判别的稳定字面量。 */
 export type NodeKind = 'parent' | 'agent' | 'file' | 'database' | 'start' | 'end' | 'pause' | 'group' | 'proxy';
@@ -36,6 +37,7 @@ export interface WorkflowValidationWarning {
 }
 /** 可选的机器执行契约；inputSchema/outputSchema 仍为柔性文本说明。 */
 export interface NodeExecutionContract {
+    inputs?: Record<string, InputRequirement>;
     inputSource?: 'ctx' | 'workspace' | 'runtime';
     requiredFiles?: string[];
     requiredTools?: string[];

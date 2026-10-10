@@ -16,7 +16,11 @@ import type { StartRunOptions, StartRunResult, RunEntry } from './run-entry.js'
 import type { RunSnapshot } from '../shared/types.js'
 import type { WorkflowDocument } from '../shared/graph-model.js'
 import { RuntimeBase } from './runtime-base.js'
-import { prepareRunInputs } from './execution-inputs.js'
+import { prepareRunInputs, executionOf } from './execution-inputs.js'
+import { runtimeInputsOf, handoffPolicyOf, validateRequiredInputs } from "./runtime-inputs.js"
+import { boundNodeInputs, workflowInputTarget } from "./input-handoff.js"
+import { mainNodeIdOf, nodeById } from "../graph/index.js"
+import type { RuntimeInputOptions } from "../shared/runtime-types.js"
 
 /**
  * 本次运行「组织预算」末段文本（自主编排方案 §6.4；P2 正式接入）。
@@ -39,6 +43,70 @@ export class RuntimeLaunch extends RuntimeBase {
    */
   protected collabChannelOf(sessionId: string): CollabChannel {
     return this.deps.runner.teamAvailable?.(sessionId) === true ? 'official' : 'legacy'
+  }
+
+
+  protected async prepareRuntimeInputs(flow: WorkflowDocument, snapshot: RunSnapshot, raw?: unknown, policy?: unknown): Promise<void> {
+    if (raw !== undefined || snapshot.runtimeInputs !== undefined) {
+      snapshot.runtimeInputs = await runtimeInputsOf(raw ?? snapshot.runtimeInputs, flow, { sessionId: snapshot.sessionId, managedRoot: this.deps.store.root, files: await this.deps.sessionInputFiles?.(snapshot.sessionId) ?? [] })
+      snapshot.inputRevision = (snapshot.inputRevision ?? 0) + (raw === undefined ? 0 : 1)
+      snapshot.workflowInputNodeId = Object.values(snapshot.runtimeInputs.workflowInputs).some((values) => values.length) ? workflowInputTarget(flow) : undefined
+    }
+    if (policy !== undefined || snapshot.handoffPolicy !== undefined) snapshot.handoffPolicy = handoffPolicyOf(policy ?? snapshot.handoffPolicy)
+    // Downstream inputs may be produced later. Initial and explicitly targeted required inputs are checked before orchestration.
+    for (const node of flow.nodes) if (node.kind === "agent" && !snapshot.nodes.find((record) => record.nodeId === node.id)?.resumed && Object.keys(executionOf(node).inputs ?? {}).length) {
+      const incoming = flow.lines.filter((line) => line.targetHandle === "flow-in" && (mainNodeIdOf(flow, line.target) ?? line.target) === node.id)
+      if (incoming.every((line) => nodeById(flow, mainNodeIdOf(flow, line.source) ?? line.source)?.kind === "start") || snapshot.runtimeInputs?.nodeInputs[node.id]) validateRequiredInputs(node, boundNodeInputs(snapshot, node.id))
+    }
+  }
+
+  async runtimeInputOptions(input: { sessionId: string; flowId: string }): Promise<RuntimeInputOptions> {
+    const flow = await this.deps.store.getWorkflow(input.sessionId, input.flowId)
+    if (!flow) throw new WfError("工作流不存在", "WF_NOT_FOUND")
+    const checkpoint = await findResumableRun(this.deps.store, input)
+    const nodeInputs: RuntimeInputOptions["nodeInputs"] = {}
+    for (const node of flow.nodes) if (node.kind === "agent") nodeInputs[node.id] = executionOf(node).inputs ?? {}
+    const files = (await this.deps.sessionInputFiles?.(input.sessionId) ?? []).map(({ attachmentId, name, bytes }) => ({ attachmentId, name, bytes }))
+    return { nodeInputs, files, handoffPolicy: checkpoint?.handoffPolicy ?? "explicit", ...(checkpoint ? { checkpoint: { runId: checkpoint.id, runtimeInputs: checkpoint.runtimeInputs, handoffPolicy: checkpoint.handoffPolicy } } : {}) }
+  }
+
+  /** Pending-node binding uses the dispatch mutex and publishes only after a durable write. */
+  async bindRuntimeInputs(input: { sessionId: string; runId: string; expectedRevision: number; nodeId: string; inputs: unknown }): Promise<RunSnapshot> {
+    const entry = this.runs.get(input.runId)
+    if (!entry || entry.snapshot.sessionId !== input.sessionId) throw new WfError("运行不存在", "WF_NOT_FOUND")
+    if (entry.inputBindingDone || entry.dispatching?.size) throw new WfError("输入绑定或节点派发尚未完成", "WF_BUSY")
+    const assertCurrent = (): void => {
+      if (this.runs.get(input.runId) !== entry || entry.controller.signal.aborted || !["running", "paused"].includes(entry.snapshot.status)) throw new WfError("运行已停止或被恢复运行替代", "WF_CANCELLED")
+      if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision !== (entry.snapshot.inputRevision ?? 0)) throw new WfError("输入版本已变化，请刷新后重新绑定", "WF_INPUT_REVISION_CONFLICT")
+    }
+    assertCurrent()
+    let release!: () => void
+    entry.inputBindingDone = new Promise<void>((resolve) => { release = resolve })
+    try {
+      const flow = await this.currentResolvedFlow(entry)
+      assertCurrent()
+      const canonical = mainNodeIdOf(flow, input.nodeId) ?? input.nodeId
+      const target = nodeById(flow, canonical)
+      const record = entry.snapshot.nodes.find((node) => node.nodeId === canonical)
+      if (target?.kind !== "agent" || record?.status !== "pending" || record.attempts !== 0) throw new WfError("只能绑定尚未派发的 Agent 节点", "WF_INPUT_STATE_CONFLICT")
+      const authorized = await runtimeInputsOf({ nodeInputs: { [canonical]: input.inputs } }, flow, { sessionId: input.sessionId, managedRoot: this.deps.store.root, files: await this.deps.sessionInputFiles?.(input.sessionId) ?? [] })
+      const inputs = { workflowInputs: structuredClone(entry.snapshot.runtimeInputs?.workflowInputs ?? {}), nodeInputs: { ...structuredClone(entry.snapshot.runtimeInputs?.nodeInputs ?? {}), [canonical]: authorized.nodeInputs[canonical] } }
+      validateRequiredInputs(target, boundNodeInputs({ ...entry.snapshot, runtimeInputs: inputs }, canonical))
+      assertCurrent()
+      const next = structuredClone(entry.snapshot)
+      next.runtimeInputs = inputs
+      next.inputRevision = input.expectedRevision + 1
+      await this.deps.store.saveRun(next)
+      assertCurrent()
+      entry.snapshot.runtimeInputs = inputs
+      entry.snapshot.inputRevision = next.inputRevision
+      // Settlements during file authorization belong to the current snapshot, not the earlier copy.
+      try { await this.deps.store.saveRun(entry.snapshot) } catch (error) { this.log().warn(`输入已绑定；最新结算状态保存失败：${messageOf(error)}`) }
+      return structuredClone(entry.snapshot)
+    } finally {
+      delete entry.inputBindingDone
+      release()
+    }
   }
 
   // ---- 编排启动 --------------------------------------------------------------
@@ -93,6 +161,7 @@ export class RuntimeLaunch extends RuntimeBase {
     const snapshot = createRunSnapshot({ runId, flow, sessionId: runSessionId, mode, now: this.now() })
     snapshot.workingDirectory = await this.deps.workingDirectory?.(runSessionId)
     await prepareRunInputs(flow, snapshot, input.fileBindings, this.deps.store.root, await this.deps.authorizedInputFiles?.(runSessionId))
+    await this.prepareRuntimeInputs(flow, snapshot, input.runtimeInputs, input.handoffPolicy)
     // 元参数三层之第三层（D-13）：把「有效值（模板 ← 实例覆盖）」冻结进快照。
     // 为什么在 startRun 冻结而非每次读取：运行期预算须可审计、可还原；此后改模板/实例
     // 的 meta 不影响本次运行（续跑继承旧冻结值，见 resume.ts 的 buildResumedSnapshot）。
@@ -133,9 +202,10 @@ export class RuntimeLaunch extends RuntimeBase {
     const defPath = this.deps.store.orchestrationFilePath(runId)
     try {
       await this.deps.store.saveOrchestration(runId, flow)
+      await this.deps.store.saveRun(snapshot)
     } catch (error) {
       this.runs.delete(runId)
-      throw new WfError(`流程定义文件写入失败：${messageOf(error)}`, 'WF_DEF_WRITE_FAILED')
+      throw new WfError(`运行记录或流程定义文件写入失败：${messageOf(error)}`, 'WF_DEF_WRITE_FAILED')
     }
 
     // 一次性注入 + 唤醒：官方 Message 契约要求 id 与 source 齐备（缺 source 父回合
@@ -163,8 +233,12 @@ export class RuntimeLaunch extends RuntimeBase {
         source: { kind: 'user' },
       })
     } catch (error) {
+      snapshot.status = "failed"
+      snapshot.summary = `编排指令注入失败：${messageOf(error)}`
+      snapshot.endedAt = this.isoNow()
+      await this.persistWarn(entry)
       this.runs.delete(runId)
-      throw new WfError(`编排指令注入失败：${messageOf(error)}`, 'WF_INJECT_FAILED')
+      throw new WfError(snapshot.summary, "WF_INJECT_FAILED")
     }
 
     // 运行记录：开始即落盘（中断/崩溃后历史面板仍有记录）
@@ -186,6 +260,8 @@ export class RuntimeLaunch extends RuntimeBase {
     const flowId = String(input.flowId ?? '')
     if (!sessionId || !flowId) throw new WfError('requires sessionId and flowId', 'WF_BAD_ARGS')
 
+    const binding = [...this.runs.values()].find((entry) => entry.snapshot.sessionId === sessionId && entry.snapshot.flowId === flowId)?.inputBindingDone
+    if (binding) await binding
     const prev = await findResumableRun(this.deps.store, { sessionId, flowId, fromRunId: input.fromRunId })
     if (!prev) {
       if (input.fromRunId) {
@@ -234,9 +310,14 @@ export class RuntimeLaunch extends RuntimeBase {
     const snapshot = buildResumedSnapshot({ prev, runId, flow, sessionId, mode: prev.mode, now: this.now() })
     this.log().info(JSON.stringify({ runId, phase: 'resume', status: 'requested', resumedFromRunId: prev.id, checkpointNodeId: snapshot.checkpointNodeId, resumeNodeIds: snapshot.resumeNodeIds }))
     snapshot.workingDirectory = await this.deps.workingDirectory?.(sessionId) ?? prev.workingDirectory
+    snapshot.runtimeInputs = prev.runtimeInputs ? structuredClone(prev.runtimeInputs) : undefined
+    snapshot.handoffPolicy = prev.handoffPolicy
+    snapshot.inputRevision = prev.inputRevision
+    snapshot.workflowInputNodeId = prev.workflowInputNodeId
     snapshot.fileBindings = prev.fileBindings ? structuredClone(prev.fileBindings) : undefined
     snapshot.parentRoute = prev.parentRoute ? { ...prev.parentRoute } : undefined
     await prepareRunInputs(flow, snapshot, input.fileBindings, this.deps.store.root, await this.deps.authorizedInputFiles?.(sessionId))
+    await this.prepareRuntimeInputs(flow, snapshot, input.runtimeInputs, input.handoffPolicy)
     const entry: RunEntry = {
       controller: new AbortController(),
       snapshot,
@@ -257,9 +338,10 @@ export class RuntimeLaunch extends RuntimeBase {
     const defPath = this.deps.store.orchestrationFilePath(runId)
     try {
       await this.deps.store.saveOrchestration(runId, flow)
+      await this.deps.store.saveRun(snapshot)
     } catch (error) {
       this.runs.delete(runId)
-      throw new WfError(`流程定义文件写入失败：${messageOf(error)}`, 'WF_DEF_WRITE_FAILED')
+      throw new WfError(`运行记录或流程定义文件写入失败：${messageOf(error)}`, 'WF_DEF_WRITE_FAILED')
     }
 
     // 断点继续指令：isResume 动态态注入末段（已 ok 不重跑；从 resumeFromNodeId 继续）。
@@ -289,8 +371,12 @@ export class RuntimeLaunch extends RuntimeBase {
         source: { kind: 'user' },
       })
     } catch (error) {
+      snapshot.status = "failed"
+      snapshot.summary = `编排指令注入失败：${messageOf(error)}`
+      snapshot.endedAt = this.isoNow()
+      await this.persistWarn(entry)
       this.runs.delete(runId)
-      throw new WfError(`编排指令注入失败：${messageOf(error)}`, 'WF_INJECT_FAILED')
+      throw new WfError(snapshot.summary, "WF_INJECT_FAILED")
     }
 
     await this.persistWarn(entry)

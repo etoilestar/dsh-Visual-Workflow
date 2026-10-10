@@ -19,7 +19,7 @@ import type { Dict } from '../i18n.js'
 import { EP } from '../lib/remote.js'
 
 export interface RunActionsFace {
-  startRun(): Promise<void>
+  startRun(configureInputs?: boolean): Promise<void>
   stopRun(): Promise<void>
   openHistory(): Promise<void>
   resumeRun(runId: string): Promise<void>
@@ -41,7 +41,7 @@ export function useRunActions(
   createInstanceFromCanvas: DocumentActionsFace['createInstanceFromCanvas'],
 ): RunActionsFace {
   // ---------- 运行（模式一） ----------
-  const startRun = useCallback(async () => {
+  const startRun = useCallback(async (configureInputs = false) => {
     if (state.mode !== 'mode1') return
     // 模板态 / 资产态：运行前自动「创建实例」（含开启新会话/覆盖确认）再运行——
     // 创建是异步的（可能弹确认框），后续启动统一经 afterCreate 回调接续。
@@ -54,7 +54,7 @@ export function useRunActions(
           notify('error', t.needStartAndEnd)
           return
         }
-        void runControl.startRun(flow.sessionId, flow.id).then((runId) => {
+        void runControl.startRun(flow.sessionId, flow.id, configureInputs).then((runId) => {
           if (runId) notify('success', t.toastRunning)
         }).catch((error) => toastError(error))
       })
@@ -72,7 +72,7 @@ export function useRunActions(
     if (!saved) return
     try {
       // 运行当前实例：会话 = 实例绑定的会话（不再支持运行期新建会话）
-      const runId = await runControl.startRun((saved as import('../../host/shared/graph-model.js').WorkflowDocument).sessionId, saved.id)
+      const runId = await runControl.startRun((saved as import('../../host/shared/graph-model.js').WorkflowDocument).sessionId, saved.id, configureInputs)
       if (runId) notify('success', t.toastRunning)
     } catch (error) {
       toastError(error)
@@ -111,7 +111,12 @@ export function useRunActions(
     if (!flow) return
     try {
       // 断点续跑在实例绑定的会话内进行（新逻辑即原执行会话）
-      const result = await remote.call(EP.EP_RUN_RESUME, { sessionId: state.run.sessionId ?? flow.sessionId, flowId: flow.id, runId }) as { runId?: unknown }
+      const sessionId = state.run.sessionId ?? flow.sessionId
+      const selection = runControl.prepareInputs ? await runControl.prepareInputs(sessionId, flow.id, runId, false, false) : undefined
+      if (selection === null) return
+      const ticket = selection?.requestGeneration ?? runControl.inputLifecycle?.capture()
+      const result = await remote.call(EP.EP_RUN_RESUME, { sessionId, flowId: flow.id, runId, ...(selection ? { runtimeInputs: selection.runtimeInputs, handoffPolicy: selection.handoffPolicy } : {}) }) as { runId?: unknown }
+      if (ticket !== undefined && runControl.inputLifecycle && !runControl.inputLifecycle.isCurrent(ticket)) return
       const newRunId = String(result?.runId ?? '')
       if (newRunId) dispatch({ type: 'RUN_STARTED', runId: newRunId, ...(state.run.sessionId ? { runSessionId: state.run.sessionId } : {}) })
       dispatch({ type: 'HISTORY_OPEN', open: false })
@@ -119,7 +124,7 @@ export function useRunActions(
     } catch (error) {
       toastError(error)
     }
-  }, [dispatch, notify, state, t.toastResuming, toastError])
+  }, [dispatch, notify, remote, runControl, state, t.toastResuming, toastError])
 
   // ---------- 模式二服务 ----------
   const startService = useCallback(async () => {
