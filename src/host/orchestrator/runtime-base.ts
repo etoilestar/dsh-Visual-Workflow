@@ -121,6 +121,14 @@ export abstract class RuntimeBase {
     return new Date(this.now()).toISOString()
   }
 
+  protected traceRuntime(snapshot: RunSnapshot, phase: string, status: string, fields: Partial<Omit<import("../shared/runtime-types.js").RuntimeEvent, "runId" | "flowId" | "phase" | "status" | "at">> = {}): void {
+    const event = { runId: snapshot.id, flowId: snapshot.flowId, phase, status, at: this.isoNow(), inputRevision: snapshot.inputRevision, ...fields }
+    snapshot.runtimeEvents ??= []
+    snapshot.runtimeEvents.push(event)
+    if (snapshot.runtimeEvents.length > 2000) snapshot.runtimeEvents.splice(0, snapshot.runtimeEvents.length - 2000)
+    this.log().info(JSON.stringify(event))
+  }
+
   /**
    * 把父代理（会话根 Agent）节点的配置注入到根 Agent 的 ctx：
    *   - 角色 Prompt（含 .md 路径读取）注册为系统提示词段 visual-workflow:prompt；
@@ -755,6 +763,7 @@ export abstract class RuntimeBase {
 
   /** 持久化 run 快照（尽力而为：失败仅告警，不阻断状态机）。 */
   protected async persistWarn(entry: RunEntry): Promise<void> {
+    await entry.inputBindingDone
     try {
       await this.deps.store.saveRun(entry.snapshot)
     } catch (error) {

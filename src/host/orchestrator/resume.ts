@@ -30,6 +30,8 @@ export const RESUMABLE_STATUSES = ['paused', 'interrupted', 'stopped'] as const
 
 /** 断点续跑入参（runResume 端点与 run 端点自动续跑共用）。 */
 export interface ResumeInput {
+  runtimeInputs?: unknown
+  handoffPolicy?: unknown
   fileBindings?: unknown
   sessionId: string
   flowId: string
@@ -126,6 +128,14 @@ export function buildResumedSnapshot(input: {
     // 元参数冻结副本继承（D-13）：续跑沿用旧 run 冻结的预算，不重读模板/实例 meta
     // ——「冻结即冻结」，保证审计与后续评估能还原本次运行当时的约束。
     ...(prev.meta ? { meta: structuredClone(prev.meta) } : {}),
+    ...(prev.runtimeInputs ? { runtimeInputs: structuredClone(prev.runtimeInputs) } : {}),
+    ...(prev.inputRevision === undefined ? {} : { inputRevision: prev.inputRevision }),
+    ...(prev.handoffPolicy ? { handoffPolicy: prev.handoffPolicy } : {}),
+    ...(prev.runtimeEvents ? { runtimeEvents: structuredClone(prev.runtimeEvents) } : {}),
+    ...(prev.budget ? { budget: structuredClone(prev.budget) } : {}),
+    ...(prev.usage ? { usage: structuredClone(prev.usage) } : {}),
+    ...(prev.parentErrors ? { parentErrors: structuredClone(prev.parentErrors) } : {}),
+    ...(prev.parentFailures ? { parentFailures: structuredClone(prev.parentFailures) } : {}),
   }
 }
 

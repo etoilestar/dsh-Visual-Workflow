@@ -53,6 +53,7 @@ export declare abstract class RuntimeBase {
     now(): number;
     /** 当前 ISO 时间字符串。 */
     protected isoNow(): string;
+    protected traceRuntime(snapshot: RunSnapshot, phase: string, status: string, fields?: Partial<Omit<import("../shared/runtime-types.js").RuntimeEvent, "runId" | "flowId" | "phase" | "status" | "at">>): void;
     /**
      * 把父代理（会话根 Agent）节点的配置注入到根 Agent 的 ctx：
      *   - 角色 Prompt（含 .md 路径读取）注册为系统提示词段 visual-workflow:prompt；

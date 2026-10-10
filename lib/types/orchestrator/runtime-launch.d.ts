@@ -1,8 +1,8 @@
 import { type ResumeInput, type ResumeResult } from './resume.js';
 import { type CollabChannel } from '../prompts/index.js';
 import type { StartRunOptions, StartRunResult } from './run-entry.js';
-import { RuntimeBase } from './runtime-base.js';
-export declare class RuntimeLaunch extends RuntimeBase {
+import { RuntimeInputManager } from "./runtime-input-manager.js";
+export declare class RuntimeLaunch extends RuntimeInputManager {
     /**
      * 协作通道判定（编排指令与成员任务块的唯一分支依据）：
      * 官方 Agent Team 可用（服务已挂载 + 根 Agent 存活 + 有可用 provider）→ official；

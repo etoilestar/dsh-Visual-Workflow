@@ -23,6 +23,7 @@ export class RuntimeLifecycle extends RuntimeObserve {
 
     // 1. 中止控制器：阻塞中的 wait 等待器随之取消
     entry.controller.abort(options.abortReason ?? `terminate-${options.status}`)
+    await entry.inputBindingDone
     // 2. 尽力中断运行中的子代理回合（防止后台空转）
     for (const childId of [...entry.inflight]) {
       try {
@@ -72,6 +73,7 @@ export class RuntimeLifecycle extends RuntimeObserve {
     if (!entry || entry.snapshot.status !== 'running') return false
     const snapshot = entry.snapshot
     snapshot.status = 'paused'
+    await entry.inputBindingDone
     snapshot.summary = options.summary ?? '执行窗口结束，已暂停（等待下一窗口继续）'
     await this.persistWarn(entry)
     return true

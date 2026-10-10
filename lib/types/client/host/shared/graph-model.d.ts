@@ -1,3 +1,4 @@
+import type { InputRequirement, OutputRequirement, WorkflowRuntimeDefinition } from "./runtime-types.js";
 import type { OrgMeta } from './org-meta.js';
 /** 节点种类：9 种判别的稳定字面量。 */
 export type NodeKind = 'parent' | 'agent' | 'file' | 'database' | 'start' | 'end' | 'pause' | 'group' | 'proxy';
@@ -36,6 +37,9 @@ export interface WorkflowValidationWarning {
 }
 /** 可选的机器执行契约；inputSchema/outputSchema 仍为柔性文本说明。 */
 export interface NodeExecutionContract {
+    inputs?: Record<string, InputRequirement>;
+    outputs?: Record<string, OutputRequirement>;
+    completion?: "turn" | "verified" | "semantic";
     inputSource?: 'ctx' | 'workspace' | 'runtime';
     requiredFiles?: string[];
     requiredTools?: string[];
@@ -286,6 +290,7 @@ export type WorkflowMode = 'mode1' | 'mode2';
  * （不按 sessionId 隔离），拖入画布保存后通过「创建实例」转为当前会话的实例。
  */
 export interface WorkflowTemplate {
+    runtime?: WorkflowRuntimeDefinition;
     /** 模板稳定标识（模板库内唯一）。 */
     id: string;
     /** 运行模式（mode1 模板 / mode2 服务模板）。 */
@@ -340,6 +345,7 @@ export interface LastAgentPatch {
  * （数据模型核心规则）。
  */
 export interface WorkflowDocument {
+    runtime?: WorkflowRuntimeDefinition;
     /** 工作流稳定标识（flowId，会话内唯一；按 sessionId + flowId 维度隔离）。 */
     id: string;
     /** 归属会话 id（会话隔离存储）。 */
