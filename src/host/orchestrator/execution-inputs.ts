@@ -49,7 +49,8 @@ export async function prepareRunInputs(flow: WorkflowDocument, snapshot: RunSnap
   for (const node of flow.nodes) {
     if (node.kind !== 'file' || node.data.fileKind !== 'file') continue
     const required = flow.lines.some((line) => {
-      if (line.source !== node.id || line.targetHandle !== 'ctx-in') return false
+      const source = nodeById(flow, line.source)
+      if ((source?.kind === "proxy" ? source.proxySourceId : line.source) !== node.id || line.targetHandle !== 'ctx-in') return false
       const target = nodeById(flow, line.target)
       const id = target?.kind === 'proxy' ? target.proxySourceId : line.target
       const status = snapshot.nodes.find((record) => record.nodeId === id)?.status
@@ -73,6 +74,7 @@ export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode
   for (const edge of edges) {
     const source = nodeById(flow, edge.source)
     const resolved = source?.kind === 'proxy' ? nodeById(flow, source.proxySourceId) : source
+    if (contract.inputSource === "ctx" && (edge.sourceHandle !== "ctx-out" || !resolved)) throw inputError(`节点 ${node.id} 的 ctx 来源或端口无效：${edge.source}`, "WF_INPUT_CONTEXT_MISSING")
     if (resolved?.kind === 'file') {
       if (resolved.data.fileKind === 'text') {
         if (!resolved.data.content?.trim()) throw inputError(`上游文本文件节点为空：${resolved.id}`, 'WF_INPUT_CONTEXT_MISSING')
@@ -87,6 +89,15 @@ export async function preflightNodeInputs(flow: WorkflowDocument, node: RoleNode
     } else if (resolved?.kind === 'agent' || resolved?.kind === 'parent' || (resolved?.kind === 'start' && flow.mode === 'mode2')) {
       const record = snapshot.nodes.find((entry) => entry.nodeId === resolved.id)
       if (contract.inputSource === 'ctx' && (!record || !['ok', 'react-capped', 'armed'].includes(record.status) || !record.output?.trim())) throw inputError(`上游 ctx 产出尚不可用：${resolved.id}`, 'WF_INPUT_CONTEXT_MISSING')
+      if (record && ["ok", "react-capped", "armed"].includes(record.status) && (resolved.kind === "agent" || resolved.kind === "parent")) {
+        try { await verifyNodeArtifacts(resolved, structuredClone(snapshot), Date.now()) } catch (error) {
+          // 上游完成时的证据不能代替下游启动时的文件可读性；保留稳定错误码。
+          if (error instanceof Error) Object.assign(error, { phase: "node_input" })
+          throw error
+        }
+      }
+    } else if (contract.inputSource === "ctx") {
+      throw inputError(`节点 ${node.id} 的 ctx 来源不能提供输入：${edge.source}`, "WF_INPUT_CONTEXT_MISSING")
     }
   }
   await Promise.all((contract.requiredFiles ?? []).map((path) => authorizedInputPath(absoluteInputPath(path, snapshot.workingDirectory), snapshot.workingDirectory, managedRoot, authorizedFiles)))

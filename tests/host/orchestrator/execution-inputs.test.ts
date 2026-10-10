@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { buildNodeBlocks } from '../../../src/host/orchestrator/task-blocks.js'
+import { preflightNodeInputs } from "../../../src/host/orchestrator/execution-inputs.js"
+import type { WorkflowDocument } from "../../../src/host/shared/graph-model.js"
 import { caller, cleanupTempDirs, makeHarness, makeFlow, fileNode, start } from './fixtures/harness.js'
 
 afterEach(cleanupTempDirs)
@@ -227,4 +229,88 @@ describe('explicit execution inputs and artifacts', () => {
     if (node.kind !== 'agent') throw new Error('fixture')
     expect(buildNodeBlocks({ flow: plain, node, snapshot: h.runtime.runSnapshot('run-2')!, documentTextLimit: 20000, systemLanguage: '中文' })[0].text).not.toContain(output)
   })
+})
+
+describe("输入绑定与业务完成证据", () => {
+  it("test_inputs_authorized_unbound_attachment_does_not_infer_CSV", async () => {
+    const outside = await makeHarness()
+    const attachment = join(outside.dir, "uploaded.csv")
+    await writeFile(attachment, "order_id,sales_amount\nS001,6000\n")
+    const h = await makeHarness(undefined, { workingDirectory: async () => h.dir, authorizedInputFiles: async () => [attachment] })
+    await writeFile(join(h.dir, "first.csv"), "first")
+    await writeFile(join(h.dir, "second.csv"), "second")
+    await h.store.saveWorkflow(withFile(), "session-1")
+    await expect(h.runtime.startRun({ sessionId: "session-1", flowId: "flow-1" })).rejects.toMatchObject({ code: "WF_INPUT_FILE_UNBOUND" })
+    expect(h.runner.calls).toHaveLength(0)
+    expect(h.runtime.activeRunForSession("session-1")).toBeNull()
+    expect(h.agents.roots.get("session-1")!.messages).toHaveLength(0)
+  })
+
+  it("test_inputs_deleted_binding_fails_before_child_creation", async () => {
+    const h = await makeHarness(undefined, { workingDirectory: async () => h.dir })
+    const csv = join(h.dir, "sales.csv")
+    await writeFile(csv, "id,amount\nS001,6000\n")
+    await h.store.saveWorkflow(withFile(), "session-1")
+    await h.runtime.startRun({ sessionId: "session-1", flowId: "flow-1", fileBindings: { csv: [csv] } })
+    await rm(csv)
+    await expect(h.runtime.wfRunNode(caller, { nodeId: "n-a1" })).rejects.toMatchObject({ code: "WF_INPUT_FILE_UNAVAILABLE" })
+    expect(h.runner.calls).toHaveLength(0)
+    expect(h.runtime.runSnapshot("run-1")!.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "fail", failure: { phase: "node_input", code: "WF_INPUT_FILE_UNAVAILABLE" } })
+  })
+
+  it("test_settlement_upload_request_without_artifact_fails_and_blocks_ctx", async () => {
+    const h = await makeHarness(undefined, { workingDirectory: async () => h.dir })
+    const flow = makeFlow()
+    const upstream = flow.nodes.find((node) => node.id === "n-a1")!
+    const downstream = flow.nodes.find((node) => node.id === "n-a2")!
+    if (upstream.kind !== "agent" || downstream.kind !== "agent") throw new Error("fixture")
+    upstream.data.execution = { outputFiles: ["raw.json"] }
+    downstream.data.execution = { inputSource: "ctx" }
+    flow.lines.push({ id: "ctx-output", source: upstream.id, target: downstream.id, sourceHandle: "ctx-out", targetHandle: "ctx-in" })
+    const { entry } = await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: upstream.id })
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "请上传 CSV" }] })
+    expect(entry.snapshot.nodes.find((node) => node.nodeId === upstream.id)).toMatchObject({ status: "fail", attempts: 1, childId: "child-1", failure: { code: "WF_OUTPUT_FILE_MISSING", phase: "run_finish" } })
+    await expect(h.runtime.wfRunNode(caller, { nodeId: downstream.id })).rejects.toMatchObject({ code: "WF_INPUT_CONTEXT_MISSING" })
+    expect(h.runner.calls).toHaveLength(1)
+  })
+
+  it.each([false, true])("test_ctx_verified_artifact_paths_rechecked_before_dispatch_deleted_%s", async (deleted) => {
+    const h = await makeHarness(undefined, { workingDirectory: async () => h.dir })
+    const flow = makeFlow()
+    const upstream = flow.nodes.find((node) => node.id === "n-a1")!
+    const downstream = flow.nodes.find((node) => node.id === "n-a2")!
+    if (upstream.kind !== "agent" || downstream.kind !== "agent") throw new Error("fixture")
+    const path = join(h.dir, "raw.json")
+    upstream.data.execution = { outputFiles: [path] }
+    downstream.data.execution = { inputSource: "ctx" }
+    flow.lines.push({ id: "ctx-output", source: upstream.id, target: downstream.id, sourceHandle: "ctx-out", targetHandle: "ctx-in" })
+    const { entry } = await start(h, flow)
+    await h.runtime.wfRunNode(caller, { nodeId: upstream.id })
+    await writeFile(path, "[{\"order_id\":\"S001\"}]")
+    await h.runtime.handleSubagentEnd({ id: "child-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "已完成读取" }] })
+    expect(entry.snapshot.nodes.find((node) => node.nodeId === upstream.id)).toMatchObject({ status: "ok", artifacts: [{ path }] })
+    if (deleted) {
+      await rm(path)
+      await expect(h.runtime.wfRunNode(caller, { nodeId: downstream.id })).rejects.toMatchObject({ code: "WF_OUTPUT_FILE_MISSING", phase: "node_input" })
+      expect(h.runner.calls).toHaveLength(1)
+    } else {
+      await h.runtime.wfRunNode(caller, { nodeId: downstream.id })
+      expect(h.runner.calls[1].blocks[0].text).toContain(path)
+      expect(h.runner.calls[1].blocks[0].text).toContain("已完成读取")
+    }
+  })
+})
+
+it.each(["unsupported", "missing", "port"])("test_inputs_required_ctx_invalid_%s_rejected_before_child", async (kind) => {
+  const h = await makeHarness()
+  const flow = makeFlow()
+  const node = flow.nodes.find((node) => node.id === "n-a1")!
+  if (node.kind !== "agent") throw new Error("fixture")
+  node.data.execution = { inputSource: "ctx" }
+  const { entry } = await start(h, flow)
+  const source = kind === "missing" ? "missing" : "n-start"
+  const invalid: WorkflowDocument = { ...flow, lines: [...flow.lines, { id: "invalid-ctx", source, target: node.id, sourceHandle: kind === "port" ? "flow-out" : "ctx-out", targetHandle: "ctx-in" }] }
+  await expect(preflightNodeInputs(invalid, node, entry.snapshot, h.dir)).rejects.toMatchObject({ code: "WF_INPUT_CONTEXT_MISSING", phase: "node_input" })
+  expect(h.runner.calls).toHaveLength(0)
 })
