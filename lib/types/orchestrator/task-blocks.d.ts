@@ -1,5 +1,6 @@
 import { type CollabChannel } from '../prompts/index.js';
-import type { RoleNode, WorkflowDocument } from '../shared/graph-model.js';
+import type { Line, RoleNode, WorkflowDocument } from '../shared/graph-model.js';
+import type { NodeInvocation } from "../shared/runtime-types.js";
 import type { RunSnapshot } from '../shared/types.js';
 /**
  * 解析节点任务块的输入结构说明（data.inputSchema）。
@@ -36,6 +37,8 @@ export declare function buildNodeBlocks(input: {
      * 缺省 legacy，保持未启用官方团队时的文案与行为。
      */
     collabChannel?: CollabChannel;
+    invocation?: NodeInvocation;
+    contextEdges?: Line[];
 }): Array<{
     type: 'text';
     text: string;

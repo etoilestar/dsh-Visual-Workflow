@@ -1,5 +1,5 @@
 import { type CollabChannel } from '../prompts/index.js';
-import type { GraphNode, RoleNode, WorkflowDocument } from '../shared/graph-model.js';
+import type { GraphNode, Line, RoleNode, WorkflowDocument } from '../shared/graph-model.js';
 import type { RunSnapshot } from '../shared/types.js';
 import { WfError } from './errors.js';
 /**
@@ -60,6 +60,7 @@ export declare function buildNodeContextFacts(input: {
     /** 运行快照：上游角色节点最终产出（ctx 连线显式注入）的读取源。 */
     snapshot: RunSnapshot;
     documentTextLimit: number;
+    contextEdges?: Line[];
 }): {
     upstreamContext: Array<{
         source: string;

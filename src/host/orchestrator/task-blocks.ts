@@ -5,10 +5,12 @@
 
 import { buildNodeTaskBlock, DEFAULT_OUTPUT_CONTRACT, type CollabChannel } from '../prompts/index.js'
 import { isGroupMember } from '../graph/index.js'
-import type { RoleNode, WorkflowDocument } from '../shared/graph-model.js'
+import type { Line, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
+import type { NodeInvocation } from "../shared/runtime-types.js"
 import type { RunSnapshot } from '../shared/types.js'
 import { buildNodeContextFacts, collabBlockOf } from './graph-facts.js'
 import { absoluteInputPath, executionOf } from './execution-inputs.js'
+import { resolveNodeDependencies } from "./dependency-resolution.js"
 
 /**
  * 解析节点任务块的输入结构说明（data.inputSchema）。
@@ -58,14 +60,19 @@ export function buildNodeBlocks(input: {
    * 缺省 legacy，保持未启用官方团队时的文案与行为。
    */
   collabChannel?: CollabChannel
+  invocation?: NodeInvocation
+  contextEdges?: Line[]
 }): Array<{ type: 'text'; text: string }> {
   const { flow, node } = input
+  const resolved = input.invocation ? undefined : resolveNodeDependencies(flow, node, input.snapshot)
+  const invocation = input.invocation ?? resolved!.invocation
   const data = node.data
   const { upstreamContext, filePaths, dbToolHint } = buildNodeContextFacts({
     flow,
     node,
     snapshot: input.snapshot,
     documentTextLimit: input.documentTextLimit,
+    contextEdges: input.contextEdges ?? resolved?.contextEdges,
   })
   const outputContract = outputContractOf(flow, node)
   const execution = executionOf(node)
@@ -94,5 +101,8 @@ export function buildNodeBlocks(input: {
   // 协作组成员：把成员清单块（含成员标识 + 角色名 + 自定义说明）追加到首条用户消息。
   // 协作信息不作为系统提示词段注入，只进用户消息。
   const collabBlock = collabBlockOf(flow, node.id, input.collabChannel ?? 'legacy')
-  return [{ type: 'text', text: collabBlock ? `${text}\n\n${collabBlock}` : text }]
+  const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text: collabBlock ? `${text}\n\n${collabBlock}` : text }]
+  if (Object.keys(invocation.inputs).length || Object.keys(invocation.parameters).length) blocks.push({ type: "text", text: `Runtime invocation (authoritative typed inputs):\n${JSON.stringify(invocation)}` })
+  if (execution.outputs) blocks.push({ type: "text", text: `Required output contract: ${JSON.stringify(execution.outputs)}. Return named text/JSON values as {"outputs":{...}}; a single text or JSON output may be returned directly. File outputs require actual writes at the declared paths.` })
+  return blocks
 }
