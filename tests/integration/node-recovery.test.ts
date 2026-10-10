@@ -1,5 +1,7 @@
 // Real runner + runtime + permission/prompt setup + persistence; only the DSH transport is fake.
 import { afterEach, expect, it, onTestFinished, vi } from "vitest"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import type { NodeStartInput } from "../../src/host/orchestrator/index.js"
 import type { WorkflowDocument } from "../../src/host/shared/graph-model.js"
 import { NodeAgentRunner } from "../../src/host/agent/runner.js"
@@ -283,4 +285,20 @@ it("test_runtime_real_runner_request_for_missing_json_does_not_publish_success",
   await h.runtime.wfRunNode(caller, { nodeId: node.id })
   await h.runtime.handleSubagentEnd({ id: "child-1", runId: "epoch-1", stopReason: "completed", lastAssistantMessage: [{ type: "text", text: "Please provide missing input" }] })
   expect(entry.snapshot.nodes.find((record) => record.nodeId === node.id)).toMatchObject({ status: "fail", result: { status: "failed", outputs: {}, artifacts: [] }, failure: { phase: "run_finish", code: "WF_OUTPUT_INVALID", nodeId: node.id, attempt: 1 } })
+})
+
+it("test_runtime_real_runner_managed_upload_without_file_node_is_in_first_task", async () => {
+  const { h, node, entry, starts, dispatched } = await makeRealRunnerHarness("n-a1", (flow) => {
+    const task = flow.nodes.find((node) => node.id === "n-a1")!
+    if (task.kind === "agent") task.data.execution = { inputs: { document: { kind: "file" } } }
+  })
+  const directory = join(h.store.root, "data", "files")
+  await mkdir(directory, { recursive: true })
+  const path = join(directory, "uploaded.txt")
+  await writeFile(path, "authorized input")
+  await h.runtime.bindRuntimeInputs({ sessionId: "session-1", runId: entry.snapshot.id, expectedRevision: 0, nodeId: node.id, inputs: { document: [{ kind: "file", fileRef: { source: "managed", path } }] } })
+  await h.runtime.wfRunNode(caller, { nodeId: node.id })
+  expect(dispatched[0].invocation?.inputs.document[0]).toMatchObject({ kind: "file", fileRef: { source: "managed", path }, origin: { source: "managed" } })
+  expect(starts[0].request.prompt.map((block) => block.text).join("\n")).toContain(path)
+  expect((await h.store.getRun(entry.snapshot.id))?.runtimeInputs?.nodeInputs[node.id].document[0]).toMatchObject({ fileRef: { path } })
 })

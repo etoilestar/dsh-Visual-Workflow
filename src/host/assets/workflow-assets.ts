@@ -23,6 +23,7 @@ import type {
 } from '../shared/asset-types.js'
 import type { GraphNode, Line, RoleNode, WorkflowMode } from '../shared/graph-model.js'
 import type { OrgMeta } from '../shared/org-meta.js'
+import { runtimeDefinitionOf } from "../graph/index.js"
 import type { AssetTxContext } from './db.js'
 import { assetNotFound, assetVersionNotFound } from './errors.js'
 import { stableStringify } from './fingerprint.js'
@@ -59,6 +60,7 @@ import {
 
 /** 节点壳：角色节点只保留结构字段，内容字段由角色版本行回填。 */
 export interface NodeShell {
+  execution?: import("../shared/graph-model.js").NodeExecutionContract
   id: string
   kind: GraphNode['kind']
   position: { x: number; y: number }
@@ -68,6 +70,7 @@ export interface NodeShell {
 
 /** 工作流资产版本行的内容字段（不含审计列）。 */
 export interface WorkflowContentFields {
+  runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition
   mode: WorkflowMode
   name: string
   description: string
@@ -104,6 +107,7 @@ export interface WorkflowAssetActiveRow {
 
 /** 登记入参（AssetStore 组装；assetId 已解析、来源绑定已确定）。 */
 export interface WorkflowWriteRequest {
+  runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition
   assetId: string
   mode: WorkflowMode
   name: string
@@ -146,6 +150,7 @@ const WORKFLOW_HISTORY_COLUMNS = [
   'nodes_json',
   'lines_json',
   'meta_json',
+  "runtime_json",
   'retrieval_context',
   'source',
   'source_run_id',
@@ -490,8 +495,8 @@ function insertWorkflowVersion(
   ctx.tx.run(
     `INSERT INTO workflow_asset_history (
        id, version_id, asset_id, mode, name, description, role_version_ids, nodes_json, lines_json,
-       meta_json, retrieval_context, source, source_run_id, source_template_id, source_fingerprint, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       meta_json, runtime_json, retrieval_context, source, source_run_id, source_template_id, source_fingerprint, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       rowId,
       versionId,
@@ -503,6 +508,7 @@ function insertWorkflowVersion(
       JSON.stringify(shells),
       JSON.stringify(request.lines),
       toJsonText(request.meta),
+      toJsonText(request.runtime ?? null),
       workflowRetrievalContext(request.assetId, request.name, request.description),
       request.source,
       // source_run_id 由复盘链路补写（V1 晋升入口不携带 run 上下文），此处显式留空
@@ -653,6 +659,7 @@ export function previewWorkflowAssetCascade(
 
 /** 内容形状（保存查重判据）：节点坐标是纯视图事实，不参与比较。 */
 interface WorkflowContentShape {
+  runtime: WorkflowWriteRequest["runtime"] | null
   mode: WorkflowMode
   name: string
   description: string
@@ -668,6 +675,7 @@ function workflowShapeOfRequest(request: Omit<WorkflowWriteRequest, 'shortCircui
     name: request.name,
     description: request.description,
     meta: request.meta,
+    runtime: request.runtime ?? null,
     nodes: request.nodes.map(comparableNodeOf),
     lines: request.lines,
   }
@@ -680,6 +688,7 @@ function workflowShapeOfRow(ctx: AssetTxContext, row: WorkflowAssetRow): Workflo
     name: row.name,
     description: row.description,
     meta: row.meta,
+    runtime: row.runtime ?? null,
     nodes: rebuildNodes(ctx, row.assetId, row).map(comparableNodeOf),
     lines: row.lines,
   }
@@ -693,6 +702,7 @@ function comparableNodeOf(node: GraphNode): unknown {
   if (isRoleNode(node)) {
     return {
       role: roleFieldsFromNode(node),
+      execution: node.data.execution ?? null,
       groupId: node.data.groupId ?? null,
       sourceAssetId: node.data.sourceAssetId ?? null,
     }
@@ -791,10 +801,10 @@ function rebuildNodes(ctx: AssetTxContext, assetId: string, row: WorkflowAssetRo
       id: shell.id,
       kind: shell.kind,
       position: shell.position,
-      data: roleFieldsToNodeData(contentOfRow(roleRow), {
+      data: { ...roleFieldsToNodeData(contentOfRow(roleRow), {
         groupId: shell.groupId ?? null,
         sourceAssetId: shell.sourceAssetId,
-      }),
+      }), ...(shell.execution ? { execution: shell.execution } : {}) },
     })
   }
   const orphan = row.roleVersionIds.find((ref) => !row.nodeShells.some((shell) => shell.id === ref.nodeId))
@@ -818,6 +828,7 @@ function workflowDetailOf(ctx: AssetTxContext, row: WorkflowAssetRow): WorkflowA
     nodes: rebuildNodes(ctx, row.assetId, row),
     lines: row.lines,
     ...(row.meta ? { meta: row.meta } : {}),
+    ...(row.runtime ? { runtime: row.runtime } : {}),
     roleVersionIds: row.roleVersionIds,
     ...(row.sourceTemplateId ? { sourceTemplateId: row.sourceTemplateId } : {}),
     createdAt: row.createdAt,
@@ -829,6 +840,7 @@ function roleShellOf(node: RoleNode): NodeShell {
   const shell: NodeShell = { id: node.id, kind: node.kind, position: node.position }
   if (node.data.groupId !== undefined) shell.groupId = node.data.groupId
   if (node.data.sourceAssetId !== undefined) shell.sourceAssetId = node.data.sourceAssetId
+  if (node.data.execution !== undefined) shell.execution = structuredClone(node.data.execution)
   return shell
 }
 
@@ -877,6 +889,7 @@ function workflowRowToAssetRow(row: Record<string, unknown>): WorkflowAssetRow {
     name: String(row.name ?? ''),
     description: String(row.description ?? ''),
     nodeShells: nodeShells as NodeShell[],
+    ...(typeof row.runtime_json === "string" && row.runtime_json !== "" ? { runtime: runtimeDefinitionOf(parseJsonStrict(row.runtime_json, "runtime_json")) } : {}),
     lines: lines as Line[],
     meta,
     roleVersionIds: (roleVersionIds as WorkflowAssetRoleRef[]).filter(

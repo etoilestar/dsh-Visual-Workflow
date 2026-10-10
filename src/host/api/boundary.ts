@@ -68,6 +68,7 @@ interface AssetStoreLike {
   setExperienceActive(id: string, active: boolean): Promise<ExperienceEntry>
   promoteRole(input: { templateId: string; fingerprint: string; role: RoleTemplate; source: 'human' | 'agent' }): Promise<PromoteResult>
   promoteWorkflow(input: {
+    runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition
     templateId: string
     fingerprint: string
     mode: WorkflowMode
@@ -80,6 +81,7 @@ interface AssetStoreLike {
   }): Promise<PromoteResult>
   saveRoleVersion(input: { assetId: string; role: RoleTemplate; source: 'human' | 'agent' }): Promise<PromoteResult>
   saveWorkflowVersion(input: {
+    runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition
     assetId: string
     mode: WorkflowMode
     name: string

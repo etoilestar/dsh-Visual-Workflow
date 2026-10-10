@@ -126,6 +126,7 @@ export function useWorkflows(
       nodes: JSON.parse(JSON.stringify(template.nodes ?? [])) as WorkflowDocument['nodes'],
       lines: JSON.parse(JSON.stringify(template.lines ?? [])) as WorkflowDocument['lines'],
       // 元参数（模板层 → 实例层）：深拷贝一份，实例后续调整预算不回流污染模板
+      ...(template.runtime ? { runtime: structuredClone(template.runtime) } : {}),
       ...(template.meta ? { meta: JSON.parse(JSON.stringify(template.meta)) as WorkflowDocument['meta'] } : {}),
       createdAt: now,
       _draft: true,

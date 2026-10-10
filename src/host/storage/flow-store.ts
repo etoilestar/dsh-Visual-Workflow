@@ -245,6 +245,7 @@ export class FlowStore {
         description: doc.description ?? current.description,
         nodes: doc.nodes,
         lines: doc.lines,
+        ...(doc.runtime ? { runtime: doc.runtime } : {}),
         ...(doc.meta ? { meta: doc.meta } : {}),
       }
       const saved = await this.writeServiceDoc(path, merged, current, sessionId, options)

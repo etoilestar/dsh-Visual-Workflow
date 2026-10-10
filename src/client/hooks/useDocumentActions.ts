@@ -78,6 +78,7 @@ function assetAsTemplate(detail: WorkflowAssetDetail): WorkflowTemplate {
     description: detail.description,
     nodes: detail.nodes,
     lines: detail.lines,
+    ...(detail.runtime ? { runtime: structuredClone(detail.runtime) } : {}),
     ...(detail.meta ? { meta: detail.meta } : {}),
   }
 }
@@ -285,6 +286,7 @@ export function useDocumentActions(
                 nodes: JSON.parse(JSON.stringify(template.nodes ?? [])) as WorkflowDocument['nodes'],
                 lines: JSON.parse(JSON.stringify(template.lines ?? [])) as WorkflowDocument['lines'],
                 // 元参数（模板层）：覆盖创建时随内容一并复制（否则模板预算在实例化后丢失）
+                ...(template.runtime ? { runtime: structuredClone(template.runtime) } : {}),
                 ...(template.meta ? { meta: template.meta } : {}),
                 createdAt: source.createdAt,
               }
@@ -307,6 +309,7 @@ export function useDocumentActions(
                 nodes: JSON.parse(JSON.stringify(template.nodes ?? [])) as ServiceState['nodes'],
                 lines: JSON.parse(JSON.stringify(template.lines ?? [])) as ServiceState['lines'],
                 // 元参数（模板层）：覆盖创建时随内容一并复制（与模式一同口径）
+                ...(template.runtime ? { runtime: structuredClone(template.runtime) } : {}),
                 ...(template.meta ? { meta: template.meta } : {}),
                 createdAt: source.createdAt,
                 updatedAt: new Date().toISOString(),
@@ -355,6 +358,7 @@ export function useDocumentActions(
       const template = flowTemplates.createFlowTemplateDraft(state.mode, t.untitledFlowTemplate)
       template.name = source.name
       template.description = source.description ?? ''
+      if (source.runtime) template.runtime = structuredClone(source.runtime)
       template.nodes = JSON.parse(JSON.stringify(state.canvas.nodes)) as never
       template.lines = JSON.parse(JSON.stringify(state.canvas.edges)) as never
       const saved = await flowTemplates.saveFlowTemplate(template, state.canvas.nodes, state.canvas.edges)

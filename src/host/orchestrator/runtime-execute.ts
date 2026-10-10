@@ -20,6 +20,7 @@ import { RuntimeLaunch } from './runtime-launch.js'
 import type { GroupNode, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import { executionOf, preflightNodeInputs } from "./execution-inputs.js"
 import { assertInvocationCurrent, resolveNodeDependencies } from "./dependency-resolution.js"
+import { failedNodeResult } from "./node-results.js"
 
 export class RuntimeExecute extends RuntimeLaunch {
   protected assertNodeBudget(run: RunEntry, count = 1): void {
@@ -559,13 +560,26 @@ export class RuntimeExecute extends RuntimeLaunch {
       if (missing.length) throw new WfError(`已完成节点的必需前驱尚未完成：${missing.map((line) => line.source).join(", ")}`, "WF_RUN_INCOMPLETE")
     }
     const isFailed = args?.status === 'failed' || requiredFailures.length > 0
+    const executing = snapshot.nodes.filter((node) => node.status === "running")
     snapshot.status = isFailed ? 'failed' : 'completed'
+    run.controller.abort(isFailed ? "parent-finish-failed" : "parent-finish-completed")
+    await run.inputBindingDone
+    for (const childId of [...run.inflight]) {
+      try { await this.deps.runner.interruptChild(childId, snapshot.sessionId) } catch { /* Best effort; terminal generation rejects late events. */ }
+    }
+    run.inflight.clear()
     snapshot.summary = String(args?.summary ?? '')
     if (args?.status !== 'failed' && requiredFailures.length) snapshot.summary = `必需执行路径的节点失败：${requiredFailures.map((record) => record.nodeId).join(', ')}；${snapshot.summary}`
     snapshot.endedAt = this.isoNow()
     snapshot.termination = { source: "parent_finish", stopReason: isFailed ? "failed" : "completed", ...(isFailed ? { failure: failureOf({ message: snapshot.summary }, "run_finish", "WF_PARENT_FINISH_FAILED", this.now()) } : {}) }
     this.log().info(JSON.stringify({ runId: snapshot.id, phase: "run_finish", status: snapshot.status, source: "parent_finish", errorCode: snapshot.termination.failure?.code }))
     terminalizeNodes(snapshot, this.now(), isFailed ? 'fail' : 'completed')
+    for (const node of executing) {
+      node.result = failedNodeResult(snapshot, node.nodeId, node.childId)
+      delete node.artifacts
+    }
+    this.rejectWaiters(run)
+    this.rejectAsks(run)
     this.traceRuntime(snapshot, isFailed ? "run_failed" : "run_completed", snapshot.status, { errorCode: snapshot.termination.failure?.code })
     await this.persistWarn(run)
     // 终态写盘之后、释放内存条目之前：向父代理注入复盘指令（best-effort，失败只告警）

@@ -27,6 +27,7 @@ export interface RolePromoteInput {
 }
 /** 工作流模版晋升入参。 */
 export interface WorkflowPromoteInput {
+    runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition;
     templateId: string;
     fingerprint: string;
     mode: WorkflowMode;
@@ -45,6 +46,7 @@ export interface RoleSaveInput {
 }
 /** 工作流资产态保存入参。 */
 export interface WorkflowSaveInput {
+    runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition;
     assetId: string;
     mode: WorkflowMode;
     name: string;

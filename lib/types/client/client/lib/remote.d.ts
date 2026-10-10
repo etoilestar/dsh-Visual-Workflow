@@ -9,6 +9,10 @@ export declare const POLL_REMOTE_TIMEOUT_MS = 8000;
 /** 携带稳定错误码的远端错误（code 可判定，调用方按语义分支）。 */
 export interface RemoteError extends Error {
     code?: string;
+    details?: Array<{
+        field: string;
+        message: string;
+    }>;
 }
 /**
  * 乐观锁冲突判定（稳定错误码本体在共享协议常量）：保存路径据此走「冲突语义」

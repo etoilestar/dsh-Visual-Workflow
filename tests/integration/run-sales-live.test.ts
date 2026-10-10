@@ -20,7 +20,7 @@ it("test_sales_live_help_and_missing_configuration_never_start_a_run", async () 
   await expect(execute(process.execPath, ["scripts/run-sales-live.mjs"], { env })).rejects.toMatchObject({ stderr: expect.stringContaining("Set DSH_BASE_URL") })
 })
 
-it.each([true, false])("test_sales_live_configurable_http_boundary_prepare_%s_keeps_route_and_rejects_missing_child_evidence", async (prepareOnly) => {
+it.each([[true, "file-node"], [false, "file-node"], [true, "runtime"], [false, "runtime"]] as const)("test_sales_live_configurable_http_boundary_prepare_%s_input_%s_keeps_route_and_rejects_missing_child_evidence", async (prepareOnly, inputMode) => {
   const workspace = await mkdtemp(join(tmpdir(), "sales-script-test-"))
   cleanups.push(() => rm(workspace, { recursive: true, force: true }))
   const requests: Array<{ endpoint: string; args: Record<string, unknown> }> = []
@@ -41,7 +41,7 @@ it.each([true, false])("test_sales_live_configurable_http_boundary_prepare_%s_ke
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   cleanups.push(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())))
   const port = (server.address() as { port: number }).port
-  const env = { ...process.env, DSH_BASE_URL: `http://127.0.0.1:${port}`, DSH_TEST_PROVIDER: "site-specific-provider", DSH_TEST_MODEL: "site-specific-model", DSH_TEST_WORKSPACE: workspace, DSH_WEB_LOG: "", SALES_CSV: join(process.cwd(), "tests/fixtures/sales_workflow_test.csv"), DSH_TEST_TIMEOUT_MS: "1000" }
+  const env = { ...process.env, DSH_BASE_URL: `http://127.0.0.1:${port}`, DSH_TEST_PROVIDER: "site-specific-provider", DSH_TEST_MODEL: "site-specific-model", DSH_TEST_WORKSPACE: workspace, DSH_WEB_LOG: "", SALES_CSV: join(process.cwd(), "tests/fixtures/sales_workflow_test.csv"), DSH_TEST_TIMEOUT_MS: "1000", DSH_TEST_INPUT_MODE: inputMode, DSH_TEST_HANDOFF_POLICY: "auto" }
   const result = execute(process.execPath, ["scripts/run-sales-live.mjs", ...prepareOnly ? ["--prepare-only"] : []], { env })
   if (prepareOnly) {
     const { stdout } = await result
@@ -51,8 +51,15 @@ it.each([true, false])("test_sales_live_configurable_http_boundary_prepare_%s_ke
     await expect(result).rejects.toMatchObject({ stderr: expect.stringContaining("load_data lacks actual child/route/artifact evidence") })
     expect(JSON.parse(await readFile(join(workspace, "live-run.json"), "utf8")).status).toBe("completed")
   }
-  const flow = requests.find(({ endpoint }) => endpoint === "putWorkflow")!.args.flow as { mode: string; nodes: Array<{ kind: string; data: { provider: string; model: string; presetId: string; execution?: { requiredTools: string[] } } }> }
+  const flow = requests.find(({ endpoint }) => endpoint === "putWorkflow")!.args.flow as { mode: string; runtime: unknown; lines: Array<{ sourceHandle: string }>; nodes: Array<{ kind: string; data: { provider: string; model: string; presetId: string; execution?: { requiredTools: string[] } } }> }
   expect(flow.mode).toBe("mode1")
+  expect(flow.runtime).toMatchObject({ version: 1, handoffPolicy: "auto" })
+  if (inputMode === "runtime") {
+    expect(flow.nodes.some((node) => node.kind === "file")).toBe(false)
+    expect(flow.lines.some((line) => line.sourceHandle === "ctx-out")).toBe(false)
+    expect(flow.nodes.find((node) => node.kind === "agent")?.data.execution).toMatchObject({ inputs: { document: { source: { workflowInput: "salesData" } } }, outputs: { artifact: { kind: "file" } } })
+    if (!prepareOnly) expect(requests.find((request) => request.endpoint === "run")?.args).toMatchObject({ runtimeInputs: { workflowInputs: { salesData: [{ kind: "file", fileRef: { source: "workspace" } }] } } })
+  }
   const nodes = flow.nodes.filter(({ kind }) => kind === "agent")
   expect(nodes).toHaveLength(5)
   for (const { data } of nodes) {

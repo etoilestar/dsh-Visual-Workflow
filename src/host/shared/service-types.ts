@@ -1,3 +1,4 @@
+import type { WorkflowRuntimeDefinition } from "./runtime-types.js"
 // Host + Client 共享契约：模式二服务实例与多租户会话映射（纯类型，零运行时依赖）。
 //
 // 职责：定义服务文档形状（services/<serviceId>.json）与 userId→sessionId 映射记录
@@ -21,6 +22,7 @@ export type ServiceStatus = 'stopped' | 'running' | 'crashed'
  * 一个服务 = 一个模式二工作流 + 一个常驻子进程 + 一个 REST API 端口（术语 §2）。
  */
 export interface ServiceState {
+  runtime?: WorkflowRuntimeDefinition
   /** 服务稳定标识（serviceId）。 */
   id: string
   /** 归属会话 id。 */

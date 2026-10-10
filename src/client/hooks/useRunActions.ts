@@ -111,7 +111,12 @@ export function useRunActions(
     if (!flow) return
     try {
       // 断点续跑在实例绑定的会话内进行（新逻辑即原执行会话）
-      const result = await remote.call(EP.EP_RUN_RESUME, { sessionId: state.run.sessionId ?? flow.sessionId, flowId: flow.id, runId }) as { runId?: unknown }
+      const sessionId = state.run.sessionId ?? flow.sessionId
+      const selection = runControl.prepareInputs ? await runControl.prepareInputs(sessionId, flow.id, runId) : undefined
+      if (selection === null) return
+      const ticket = selection?.requestGeneration ?? runControl.inputLifecycle?.capture()
+      const result = await remote.call(EP.EP_RUN_RESUME, { sessionId, flowId: flow.id, runId, ...(selection ? { runtimeInputs: selection.runtimeInputs, handoffPolicy: selection.handoffPolicy } : {}) }) as { runId?: unknown }
+      if (ticket !== undefined && runControl.inputLifecycle && !runControl.inputLifecycle.isCurrent(ticket)) return
       const newRunId = String(result?.runId ?? '')
       if (newRunId) dispatch({ type: 'RUN_STARTED', runId: newRunId, ...(state.run.sessionId ? { runSessionId: state.run.sessionId } : {}) })
       dispatch({ type: 'HISTORY_OPEN', open: false })
@@ -119,7 +124,7 @@ export function useRunActions(
     } catch (error) {
       toastError(error)
     }
-  }, [dispatch, notify, state, t.toastResuming, toastError])
+  }, [dispatch, notify, remote, runControl, state, t.toastResuming, toastError])
 
   // ---------- 模式二服务 ----------
   const startService = useCallback(async () => {

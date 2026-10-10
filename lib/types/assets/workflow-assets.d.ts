@@ -5,6 +5,7 @@ import type { AssetTxContext } from './db.js';
 import { type RolePortContext } from './role-assets.js';
 /** 节点壳：角色节点只保留结构字段，内容字段由角色版本行回填。 */
 export interface NodeShell {
+    execution?: import("../shared/graph-model.js").NodeExecutionContract;
     id: string;
     kind: GraphNode['kind'];
     position: {
@@ -16,6 +17,7 @@ export interface NodeShell {
 }
 /** 工作流资产版本行的内容字段（不含审计列）。 */
 export interface WorkflowContentFields {
+    runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition;
     mode: WorkflowMode;
     name: string;
     description: string;
@@ -49,6 +51,7 @@ export interface WorkflowAssetActiveRow {
 }
 /** 登记入参（AssetStore 组装；assetId 已解析、来源绑定已确定）。 */
 export interface WorkflowWriteRequest {
+    runtime?: import("../shared/runtime-types.js").WorkflowRuntimeDefinition;
     assetId: string;
     mode: WorkflowMode;
     name: string;

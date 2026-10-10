@@ -18,6 +18,7 @@ it("test_pure_coordinator_read_and_graph_patch_cannot_bind_business_inputs", asy
   await h.runtime.authorizeParentTool(caller, "read", { path: h.store.orchestrationFilePath(entry.snapshot.id) })
   await expect(h.runtime.authorizeParentTool(caller, "read", { path: "/workspace/business.txt" })).rejects.toMatchObject({ code: "WF_PARENT_TOOL_DENIED" })
   await expect(h.runtime.authorizeParentTool(caller, "wf_graph_patch", { ops: [{ op: "update_node_data", nodeId: "n-a1", data: { systemPrompt: "temporary input" } }] })).rejects.toMatchObject({ code: "WF_PARENT_TOOL_DENIED" })
+  await expect(h.runtime.authorizeParentTool(caller, "wf_graph_patch", { ops: [{ op: "create_node", node: { kind: "file", data: { managedPath: "/guessed/input.csv" } } }] })).rejects.toMatchObject({ code: "WF_PARENT_TOOL_DENIED" })
   await h.runtime.authorizeParentTool(caller, "wf_graph_patch", { ops: [{ op: "update_node_data", nodeId: "n-a1", data: { label: "new label" } }] })
 })
 

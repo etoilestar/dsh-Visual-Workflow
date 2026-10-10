@@ -149,6 +149,7 @@ export class RuntimeObserve extends RuntimeComm {
   }
 
   private currentChild(entry: RunEntry, childId: string, meta: ChildMeta): boolean {
+    if (entry.controller.signal.aborted || !["running", "paused"].includes(entry.snapshot.status)) return false
     if (this.childIndex.get(childId) !== meta || meta.retired || (meta.runId && entry.snapshot.id !== meta.runId)) return false
     const node = entry.snapshot.nodes.find((record) => record.nodeId === meta.nodeId)
     // 旧登记缺省代际仍兼容；新的代际必须三元组一致。

@@ -22,7 +22,11 @@ export class RuntimeGovernance extends RuntimeLifecycle {
     if (name === WF_GRAPH_PATCH) {
       const operations = Array.isArray(part.operations) ? part.operations : Array.isArray(part.ops) ? part.ops : [part]
       for (const raw of operations) {
-        const op = raw as { op?: unknown; type?: unknown; data?: unknown; patch?: unknown } | null
+        const op = raw as { op?: unknown; type?: unknown; data?: unknown; patch?: unknown; node?: { data?: unknown } } | null
+        if (op?.op === "create_node") {
+          const data = op.node?.data
+          if (data && typeof data === "object" && ["content", "files", "managedPath", "fileName"].some((key) => Object.hasOwn(data, key))) return denied()
+        }
         if (op?.op !== "update_node_data" && op?.type !== "update_node_data") continue
         const data = op.data ?? op.patch
         if (data && typeof data === "object" && ["systemPrompt", "execution", "content", "files", "managedPath", "fileName"].some((key) => Object.hasOwn(data, key))) return denied()

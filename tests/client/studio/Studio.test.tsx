@@ -57,6 +57,11 @@ function remoteStub(): RemoteFace & { calls: Array<{ endpoint: string; args: Rec
         return [{ id: 'run-9', flowId: 'x', status: 'interrupted', startedAt: '2026-08-23T10:00:00.000Z', summary: '中断于节点' }]
       }
       if (endpoint === EP.EP_RUN_RESUME) return { runId: 'run-10' }
+      if (endpoint === EP.EP_RUNTIME_INPUT_OPTIONS) return { workflowInputs: {}, nodeInputs: {}, files: [], handoffPolicy: "explicit" }
+      if (endpoint === EP.EP_RUN_STATUS) {
+        const saved = [...calls].reverse().find((call) => call.endpoint === EP.EP_PUT_WORKFLOW)?.args.flow as { id: string }
+        return { id: "run-9", flowId: saved.id, status: "interrupted", nodes: [] }
+      }
       if (endpoint === EP.EP_ACTIVE_RUNS) return [] // 无活跃 run（默认）
       if (endpoint === EP.EP_LIST_WORKFLOWS) return [] // 无实例（默认；自动选中保持空白画布）
       if (endpoint === EP.EP_PUT_WORKFLOW || endpoint === EP.EP_PUT_FLOW_TEMPLATE) {
@@ -289,6 +294,9 @@ describe('Studio 交互', () => {
     await act(async () => {
       resumeButton?.click()
     })
+    expect(remote.calls.some((call) => call.endpoint === EP.EP_RUN_RESUME)).toBe(false)
+    expect(document.querySelector(".wf-runtime-inputs")?.textContent).toContain(zh.runtimeInputsTitle)
+    await act(async () => { document.querySelector<HTMLButtonElement>(".wf-runtime-inputs .is-primary")?.click() })
     const resume = remote.calls.find((call) => call.endpoint === EP.EP_RUN_RESUME)
     expect(resume).toBeTruthy()
     expect(resume?.args).toMatchObject({ sessionId: 's-1', runId: 'run-9' })
