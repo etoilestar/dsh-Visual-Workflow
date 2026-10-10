@@ -26,7 +26,7 @@ describe('wfRunNode 异步路径与护栏', () => {
     expect(node.status).toBe('running')
     expect(node.attempts).toBe(1)
     expect(entry.inflight.has('child-1')).toBe(true)
-    expect(h.runtime.childMetaFor('child-1')).toEqual({ sessionId: 'session-1', flowId: 'flow-1', nodeId: 'n-a1' })
+    expect(h.runtime.childMetaFor('child-1')).toEqual({ sessionId: 'session-1', flowId: 'flow-1', nodeId: 'n-a1', runId: entry.snapshot.id, attempt: 1 })
   })
 
   it('任务块注入：marker 三段布局 + 节点身份数据透传（不绑定提示词文案）', async () => {
@@ -429,7 +429,7 @@ describe('wfRunNode 协作组路径（官方 Agent Team）', () => {
     // 组卡片状态与成员事件归属（成员 subagent/end 按 childIndex 回写各自节点）
     expect(entry.snapshot.nodes.find((n) => n.nodeId === 'n-g1')!.status).toBe('running')
     expect(entry.inflight.has('g-child-1')).toBe(true)
-    expect(h.runtime.childMetaFor('g-child-1')).toEqual({ sessionId: 'session-1', flowId: 'flow-g', nodeId: 'n-dev' })
+    expect(h.runtime.childMetaFor('g-child-1')).toEqual({ sessionId: 'session-1', flowId: 'flow-g', nodeId: 'n-dev', runId: entry.snapshot.id, attempt: 1 })
   })
 
   it('成员任务块走官方协作通道：含官方投递工具与成员名（不是自建协作工具）', async () => {
@@ -597,5 +597,45 @@ describe('wfFinish 收尾', () => {
     const h = await makeHarness()
     await expect(h.runtime.wfFinish(childCaller, {})).rejects.toMatchObject({ code: 'WF_NOT_ROOT' })
     await expect(h.runtime.wfFinish(caller, {})).rejects.toMatchObject({ code: 'WF_NO_ACTIVE_RUN' })
+  })
+})
+
+describe("节点派发并发与取消", () => {
+  it("test_dispatch_concurrent_proxy_counts_one_attempt", async () => {
+    const h = await makeHarness()
+    const { entry } = await start(h, makeFlow())
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const original = h.runner.startNodeTask.bind(h.runner)
+    const create = vi.spyOn(h.runner, "startNodeTask").mockImplementation(async (input) => { await gate; return original(input) })
+    const first = h.runtime.wfRunNode(caller, { nodeId: "n-a2" })
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+    await expect(h.runtime.wfRunNode(caller, { nodeId: "n-proxy-a2" })).rejects.toMatchObject({ code: "WF_BUSY" })
+    expect(entry.attempts.get("n-a2")).toBe(1)
+    expect(entry.callCount).toBe(1)
+    release()
+    await first
+    expect(h.runner.calls).toHaveLength(1)
+  })
+
+  it("test_dispatch_cancelled_caller_does_not_consume_attempt", async () => {
+    const h = await makeHarness()
+    const { entry } = await start(h, makeFlow())
+    await expect(h.runtime.wfRunNode(caller, { nodeId: "n-a1" }, AbortSignal.abort())).rejects.toMatchObject({ code: "WF_CANCELLED" })
+    expect(h.runner.calls).toHaveLength(0)
+    expect(entry.attempts.size).toBe(0)
+  })
+
+  it("test_dispatch_unrecoverable_failure_preserves_diagnostics_budget_and_finish", async () => {
+    const h = await makeHarness()
+    const { entry } = await start(h, makeFlow())
+    h.runner.nextFail = Object.assign(new Error("宿主不能安全恢复"), { code: "NOT_RESUMABLE", childId: "old-child", cause: new Error("会话缺失") })
+    await expect(h.runtime.wfRunNode(caller, { nodeId: "n-a1", retryLimit: 0 })).rejects.toMatchObject({ code: "NOT_RESUMABLE" })
+    expect(entry.snapshot.nodes.find((node) => node.nodeId === "n-a1")).toMatchObject({ status: "fail", attempts: 1, childId: "old-child", failure: { code: "NOT_RESUMABLE", phase: "child_start" } })
+    await expect(h.runtime.wfRunNode(caller, { nodeId: "n-a1", retryLimit: 0 })).rejects.toMatchObject({ code: "WF_RETRY_LIMIT" })
+    expect(h.runner.calls).toHaveLength(1)
+    await h.runtime.wfFinish(caller, { status: "failed", summary: "不可安全继续" })
+    expect(h.runtime.activeRunForSession("session-1")).toBeNull()
+    expect((await h.runtime.wfFinish(caller, { status: "failed" })).idempotent).toBe(true)
   })
 })

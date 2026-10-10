@@ -17,7 +17,7 @@ import { createWaiter, type FinishArgs, type FinishResult, type RunEntry, type R
 import { failureOf, setNodeStatus, statusText, terminalizeNodes } from './snapshot.js'
 import { GLOBAL_RUN_CALL_LIMIT, type CallerInfo, type GroupMemberPlan, type GroupStartResult } from './seams.js'
 import { RuntimeLaunch } from './runtime-launch.js'
-import type { GroupNode, WorkflowDocument } from '../shared/graph-model.js'
+import type { GroupNode, RoleNode, WorkflowDocument } from '../shared/graph-model.js'
 import { preflightNodeInputs } from './execution-inputs.js'
 
 export class RuntimeExecute extends RuntimeLaunch {
@@ -116,6 +116,20 @@ export class RuntimeExecute extends RuntimeLaunch {
     if (node.kind !== 'agent') {
       throw new WfError(`wf_run_node 只接受角色(agent)节点；「${labelOf(node)}」类型为 ${node.kind}`, 'WF_NODE_KIND')
     }
+    const dispatching = run.dispatching ??= new Set<string>()
+    if (dispatching.has(node.id)) throw new WfError(`节点「${labelOf(node)}」正在派发任务`, "WF_BUSY")
+    dispatching.add(node.id)
+    try { return await this.runAgentNode(run, flow, node, args, callerSignal) } finally { dispatching.delete(node.id) }
+  }
+
+  private async runAgentNode(run: RunEntry, flow: WorkflowDocument, node: RoleNode, args: RunNodeArgs, callerSignal?: AbortSignal): Promise<RunNodeResult> {
+    const signal = callerSignal ? AbortSignal.any([run.controller.signal, callerSignal]) : run.controller.signal
+    const assertActive = (): void => {
+      if (signal.aborted) throw new WfError("节点派发已取消", "WF_CANCELLED")
+      if (run.snapshot.status === "paused") throw new WfError("运行已暂停，不能继续派发或重建", "WF_PAUSED")
+      if (run.snapshot.status !== "running") throw new WfError("运行已终止，不能继续派发或重建", "WF_STOPPED")
+    }
+    assertActive()
     // 虚拟节点解析后一切以主节点 key 记账（共享同一子代理执行实例与快照记录）
     const resolvedNodeId = node.id
 
@@ -161,6 +175,7 @@ export class RuntimeExecute extends RuntimeLaunch {
 
     try {
       await preflightNodeInputs(flow, node, run.snapshot, this.deps.store.root, await this.deps.authorizedInputFiles?.(run.snapshot.sessionId))
+      assertActive()
       const blocks = buildNodeBlocks({
       flow,
       node,
@@ -176,7 +191,8 @@ export class RuntimeExecute extends RuntimeLaunch {
         mode: run.snapshot.mode,
         node,
         blocks,
-        signal: run.controller.signal,
+        signal,
+        assertActive,
         collabPrompt: collabPromptOf(flow, node.id),
         ...(thinking !== undefined ? { thinking } : {}),
         ...(effectiveReactLimit !== undefined ? { iterationLimit: effectiveReactLimit } : {}),
@@ -195,7 +211,7 @@ export class RuntimeExecute extends RuntimeLaunch {
       }
       setNodeStatus(run.snapshot, resolvedNodeId, "running", { childId, now: this.now() })
       run.inflight.add(childId)
-      this.childIndex.set(childId, { sessionId: run.snapshot.sessionId, flowId: run.snapshot.flowId, nodeId: resolvedNodeId })
+      this.childIndex.set(childId, { sessionId: run.snapshot.sessionId, flowId: run.snapshot.flowId, nodeId: resolvedNodeId, runId: run.snapshot.id, attempt, ...(this.childEpochs.has(childId) ? { hostEpochId: this.childEpochs.get(childId) } : {}) })
       this.childByNode.set(resolvedNodeId, childId)
       this.applyPendingChildRoute(run, resolvedNodeId, childId)
       await this.persistWarn(run)
@@ -203,9 +219,10 @@ export class RuntimeExecute extends RuntimeLaunch {
       if (!waitRequested) return { nodeId: resolvedNodeId, status: 'started', childId }
     } catch (error) {
       if (waiter) run.waiters.delete(waitKey)
-      if (run.snapshot.status === "running") {
+      if (run.snapshot.status === "running" || run.snapshot.status === "paused") {
         const failure = failureOf(error, "child_start", "WF_CHILD_START_FAILED", this.now())
-        setNodeStatus(run.snapshot, resolvedNodeId, "fail", { attempts: attempt, now: this.now(), failure, stopReason: "start-error", recordTurn: true })
+        const failedChildId = error instanceof Error && "childId" in error && typeof error.childId === "string" ? error.childId : undefined
+        setNodeStatus(run.snapshot, resolvedNodeId, "fail", { attempts: attempt, now: this.now(), failure, childId: failedChildId, stopReason: "start-error", recordTurn: true })
         await this.persistWarn(run)
         this.log().warn(JSON.stringify({ runId: run.snapshot.id, nodeId: resolvedNodeId, attempt, phase: failure.phase, errorCode: failure.code, status: "fail" }))
       }
@@ -331,7 +348,7 @@ export class RuntimeExecute extends RuntimeLaunch {
       started.add(member.nodeId)
       setNodeStatus(run.snapshot, member.nodeId, 'running', { childId: member.childId, now: this.now() })
       run.inflight.add(member.childId)
-      this.childIndex.set(member.childId, { sessionId, flowId: run.snapshot.flowId, nodeId: member.nodeId })
+      this.childIndex.set(member.childId, { sessionId, flowId: run.snapshot.flowId, nodeId: member.nodeId, runId: run.snapshot.id, attempt: run.attempts.get(member.nodeId), ...(this.childEpochs.has(member.childId) ? { hostEpochId: this.childEpochs.get(member.childId) } : {}) })
       this.childByNode.set(member.nodeId, member.childId)
       this.applyPendingChildRoute(run, member.nodeId, member.childId)
       await this.persistWarn(run)

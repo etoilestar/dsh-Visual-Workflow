@@ -76,6 +76,7 @@ class FakeSubagents implements SubagentsServiceLike {
   dispatches: Array<{ sender: unknown; targetId: string; content: unknown[]; signal?: AbortSignal }> = []
   interrupts: Array<{ childId: string; authority: { kind: 'user'; parentSessionId: string } }> = []
   failStart: unknown = null
+  failDelivery: unknown = null
   /** 时序断言钩子（派发触发时回调，用于验证 setLimit 先于派发）。 */
   onDispatch?: () => void
   private seq = 0
@@ -95,6 +96,7 @@ class FakeSubagents implements SubagentsServiceLike {
   /** 相邻 Agent 投递（live 父 Agent → direct child）；0.1.5-rc.1 已无 followup 通道。 */
   async sendMessage(sender: unknown, targetId: string, content: unknown[], options: { signal?: AbortSignal }): Promise<void> {
     this.onDispatch?.()
+    if (this.failDelivery !== null) throw this.failDelivery
     this.dispatches.push({ sender, targetId, content, signal: options.signal })
   }
   async interrupt(childId: string, authority: { kind: 'user'; parentSessionId: string }): Promise<void> {
@@ -141,7 +143,10 @@ interface RunnerHarness {
   toolsView: FakeToolsView
     react: { setLimit: ReturnType<typeof vi.fn>; drop: ReturnType<typeof vi.fn>; consumeCapped: ReturnType<typeof vi.fn> }
     modelSelection: { contribution: ReturnType<typeof vi.fn>; attach: ReturnType<typeof vi.fn> }
-    promptSetup: { contribution: ReturnType<typeof vi.fn>; attach: ReturnType<typeof vi.fn> }
+    promptSetup: { contribution: ReturnType<typeof vi.fn>; attach: ReturnType<typeof vi.fn>; withPending: ReturnType<typeof vi.fn> }
+    toolFilter: ChildToolFilterSetup
+    retireChild: ReturnType<typeof vi.fn>
+    warnings: string[]
 }
 
 async function makeHarness(): Promise<RunnerHarness> {
@@ -155,6 +160,9 @@ async function makeHarness(): Promise<RunnerHarness> {
   const toolsView = new FakeToolsView()
   const react = { setLimit: vi.fn(), drop: vi.fn(), consumeCapped: vi.fn(() => false) }
   const modelSelection = { contribution: vi.fn(() => () => {}), attach: vi.fn() }
+  const toolFilter = fakeGroupDeps().toolFilter
+  const retireChild = vi.fn()
+  const warnings: string[] = []
     const promptSetup = { contribution: vi.fn(() => () => {}), withPending: vi.fn((_state, operation) => operation()), attach: vi.fn() }
   const runner = new NodeAgentRunner({
     store,
@@ -162,11 +170,14 @@ async function makeHarness(): Promise<RunnerHarness> {
     subagents: () => subagents,
     toolsView,
     ...fakeGroupDeps(),
+    toolFilter,
+    retireChild,
+    logger: { warn: (message) => warnings.push(message), info: () => {}, debug: () => {} },
     react: react as unknown as ReactGuardBridge,
     modelSelection: modelSelection as unknown as ModelSelectionSetup,
     promptSetup: promptSetup as unknown as ChildPromptSetup,
   })
-  return { runner, store, subagents, agents, toolsView, react, modelSelection, promptSetup }
+  return { runner, store, subagents, agents, toolsView, react, modelSelection, promptSetup, toolFilter, retireChild, warnings }
 }
 
 /**
@@ -1065,4 +1076,168 @@ describe("Preset capability diagnostics and lifecycle", () => {
     const empty = new CordisToolsView(toolsViewCtx({ tools: { schemas: () => [] }, agentPresets: { list: async () => [], standingKeyFor: async () => key } }))
     await expect(resolveAgentTools({ ...input, toolsView: empty })).rejects.toMatchObject({ code: "WF_CHILD_TOOL_POLICY_FAILED", message: expect.stringContaining("read, write") })
   })
+})
+
+function subagentFailure(code: string, cause?: unknown): Error & { code: string } {
+  return Object.assign(new Error(`宿主投递失败：${code}`, { cause }), { name: "SubagentError", code })
+}
+
+describe("NOT_RESUMABLE 安全重建", () => {
+  it("test_reuse_resumable_keeps_ID_and_latest_blocks", async () => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    const first = await h.runner.startNodeTask(taskInput())
+    const latest = taskInput({ blocks: blocks("第二轮最新任务") })
+    const second = await h.runner.startNodeTask(latest)
+    expect(second).toEqual({ childId: first.childId, created: false })
+    expect(h.subagents.started).toHaveLength(1)
+    expect(h.subagents.dispatches).toEqual([{ sender: h.agents.parents.get("session-1"), targetId: first.childId, content: latest.blocks, signal: latest.signal }])
+    expect(h.retireChild).not.toHaveBeenCalled()
+  })
+
+  it("test_rebuild_NOT_RESUMABLE_preserves_policy_prompt_model_blocks_and_cause", async () => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    h.toolsView.presets.set("standard", ["read", "write", "wf_run_node"])
+    const toolPending = vi.spyOn(h.toolFilter, "withPending")
+    const input = taskInput({ node: agentNode("n-a1", { presetId: "standard", systemPrompt: "只执行节点任务" }), runId: "run-2", attempt: 2 })
+    const first = await h.runner.startNodeTask(input)
+    const cause = new Error("持久会话读取失败")
+    h.subagents.failDelivery = subagentFailure("NOT_RESUMABLE", cause)
+    const latest = { ...input, blocks: [{ type: "text" as const, text: "最新 CSV 输入" }, { type: "text" as const, text: "完整契约" }] }
+    const rebuilt = await h.runner.startNodeTask(latest)
+    expect(rebuilt).toEqual({ childId: "child-2", created: true, replacedChildId: first.childId })
+    expect(h.subagents.dispatches).toHaveLength(0)
+    expect(h.subagents.started).toHaveLength(2)
+    expect(h.subagents.started[1].request.prompt).toEqual(latest.blocks)
+    expect(h.subagents.started[1].request.agentOptions).toEqual({ provider: "deepseek", model: "deepseek-chat" })
+    expect(h.subagents.started[1].provider).toBe("spawn")
+    expect(toolPending.mock.calls.map(([allow]) => allow)).toEqual([["read", "write"], ["read", "write"]])
+    expect(h.promptSetup.withPending).toHaveBeenLastCalledWith({ systemPrompt: "只执行节点任务", injectSystemPrompt: true, injectToolSections: true }, expect.any(Function))
+    expect(h.retireChild).toHaveBeenCalledExactlyOnceWith(first.childId)
+    expect(h.react.drop).toHaveBeenCalledWith(first.childId)
+    expect(h.subagents.interrupts).toEqual([{ childId: first.childId, authority: { kind: "user", parentSessionId: "session-1" } }])
+    expect(JSON.parse(h.warnings[0])).toMatchObject({ runId: "run-2", nodeId: "n-a1", childId: first.childId, attempt: 2, errorCode: "NOT_RESUMABLE", accepted: false, cause: cause.message })
+    h.subagents.failDelivery = null
+    expect(await h.runner.startNodeTask(latest)).toEqual({ childId: "child-2", created: false })
+  })
+
+  it.each(["UNAUTHORIZED", "CANCELLED", "ACTIVATION_CLOSING", "DELIVERY_FAILED"])("test_reuse_%s_preserves_failure_without_rebuild", async (code) => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    await h.runner.startNodeTask(taskInput())
+    const error = subagentFailure(code)
+    h.subagents.failDelivery = error
+    await expect(h.runner.startNodeTask(taskInput())).rejects.toBe(error)
+    expect(h.subagents.started).toHaveLength(1)
+    expect(h.retireChild).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    new Error("subagent is unavailable"),
+    Object.assign(new Error("unavailable"), { code: "NOT_RESUMABLE" }),
+    { name: "SubagentError", code: "NOT_RESUMABLE", message: "unavailable" },
+  ])("test_reuse_unverified_error_%j_does_not_rebuild", async (error) => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    await h.runner.startNodeTask(taskInput())
+    h.subagents.failDelivery = error
+    await expect(h.runner.startNodeTask(taskInput())).rejects.toBe(error)
+    expect(h.subagents.started).toHaveLength(1)
+  })
+
+  it("test_reuse_ambiguous_accepted_delivery_does_not_duplicate_executor", async () => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    await h.runner.startNodeTask(taskInput())
+    h.subagents.onDispatch = () => {
+      h.subagents.dispatches.push({ sender: {}, targetId: "child-1", content: blocks() })
+      throw subagentFailure("DELIVERY_FAILED")
+    }
+    await expect(h.runner.startNodeTask(taskInput())).rejects.toMatchObject({ code: "DELIVERY_FAILED" })
+    expect(h.subagents.dispatches).toHaveLength(1)
+    expect(h.subagents.started).toHaveLength(1)
+  })
+
+  it("test_rebuild_creation_failure_preserves_cache_and_causes_without_loop", async () => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    await h.runner.startNodeTask(taskInput())
+    const resume = subagentFailure("NOT_RESUMABLE")
+    const creation = subagentFailure("ACTIVATION_CLOSING", new Error("父代理关闭"))
+    h.subagents.failDelivery = resume
+    h.subagents.failStart = creation
+    await expect(h.runner.startNodeTask(taskInput())).rejects.toBe(creation)
+    expect(creation).toMatchObject({ resumeError: resume, childId: "child-1" })
+    expect(h.subagents.started).toHaveLength(2)
+    expect(await h.runner.ensureNodeChild(taskInput())).toEqual({ childId: "child-1", created: false })
+    expect(h.retireChild).not.toHaveBeenCalled()
+    expect(h.warnings.map((message) => JSON.parse(message).phase)).toEqual(["child_resume", "child_rebuild"])
+  })
+
+  it("test_dispatch_concurrent_node_rejects_duplicate_and_releases_lock", async () => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const original = h.subagents.startContinuable.bind(h.subagents)
+    const create = vi.spyOn(h.subagents, "startContinuable").mockImplementation(async (spec) => { await gate; return original(spec) })
+    const first = h.runner.startNodeTask(taskInput())
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce())
+    await expect(h.runner.startNodeTask(taskInput())).rejects.toMatchObject({ code: "WF_BUSY" })
+    release()
+    await first
+    expect((await h.runner.startNodeTask(taskInput())).created).toBe(false)
+    expect(h.subagents.started).toHaveLength(1)
+    expect(h.subagents.dispatches).toHaveLength(1)
+  })
+
+  it.each(["abort", "pause"])("test_rebuild_during_%s_does_not_create_child", async (kind) => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    const controller = new AbortController()
+    let active = true
+    const input = taskInput({ signal: controller.signal, assertActive: () => { if (!active) throw Object.assign(new Error("暂停"), { code: "WF_PAUSED" }) } })
+    await h.runner.startNodeTask(input)
+    h.subagents.failDelivery = subagentFailure("NOT_RESUMABLE")
+    h.subagents.onDispatch = () => { if (kind === "abort") controller.abort(); else active = false }
+    await expect(h.runner.startNodeTask(input)).rejects.toMatchObject({ code: kind === "abort" ? "CANCELLED" : "WF_PAUSED" })
+    expect(h.subagents.started).toHaveLength(1)
+  })
+
+  it("test_dispatch_pre_cancelled_does_not_create_child", async () => {
+    const h = await makeHarness()
+    await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read", "write"], mcpServers: [] })
+    await expect(h.runner.startNodeTask(taskInput({ signal: AbortSignal.abort() }))).rejects.toMatchObject({ code: "CANCELLED" })
+    expect(h.subagents.started).toHaveLength(0)
+  })
+})
+
+it("test_reuse_error_explicitly_accepted_does_not_rebuild_even_with_NOT_RESUMABLE", async () => {
+  const h = await makeHarness()
+  await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read"], mcpServers: [] })
+  await h.runner.startNodeTask(taskInput())
+  const error = Object.assign(subagentFailure("NOT_RESUMABLE"), { accepted: true })
+  h.subagents.failDelivery = error
+  await expect(h.runner.startNodeTask(taskInput())).rejects.toBe(error)
+  expect(h.subagents.started).toHaveLength(1)
+})
+
+it("test_creation_cancelled_after_host_returns_interrupts_new_child_and_keeps_old_cache", async () => {
+  const h = await makeHarness()
+  await h.store.saveToolCombo({ id: "combo-c1", name: "测试权限", tools: ["read"], mcpServers: [] })
+  await h.runner.startNodeTask(taskInput())
+  h.subagents.failDelivery = subagentFailure("NOT_RESUMABLE")
+  const controller = new AbortController()
+  const original = h.subagents.startContinuable.bind(h.subagents)
+  vi.spyOn(h.subagents, "startContinuable").mockImplementation(async (spec) => {
+    const result = await original(spec)
+    controller.abort()
+    return result
+  })
+  await expect(h.runner.startNodeTask(taskInput({ signal: controller.signal }))).rejects.toMatchObject({ code: "CANCELLED" })
+  expect(await h.runner.ensureNodeChild(taskInput())).toEqual({ childId: "child-1", created: false })
+  expect(h.retireChild).toHaveBeenCalledExactlyOnceWith("child-2")
+  expect(h.react.drop).toHaveBeenCalledWith("child-2")
+  expect(h.subagents.interrupts.map(({ childId }) => childId)).toEqual(["child-2"])
 })

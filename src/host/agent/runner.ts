@@ -597,6 +597,8 @@ export interface NodeAgentRunnerDeps {
    */
   toolSwitches?: () => ReadonlySet<string> | Promise<ReadonlySet<string>>
   logger?: OrchestratorLogger
+  /** 已替换 child 的作用域撤销由宿主执行；普通结束不调用。 */
+  retireChild?: (childId: string) => void
 }
 
 /**
@@ -611,6 +613,8 @@ export class NodeAgentRunner implements NodeRunner {
   private readonly nodeChildren = new Map<string, { childId: string; signature: string }>()
   /** 已创建 childId 集合（dispose 清理护栏登记用）。 */
   private readonly childIds = new Set<string>()
+  /** 只覆盖创建/投递窗口，同节点并发调用拒绝而不排队重复投递。 */
+  private readonly dispatching = new Set<string>()
   /** 软截停消费适配（NodeRunner 契约）。 */
   readonly consumeReactCapped: NonNullable<NodeRunner['consumeReactCapped']>
   /** 协作组启动器（官方 Team 路径；与节点路径共用同一套依赖与装配对象）。 */
@@ -661,21 +665,50 @@ export class NodeAgentRunner implements NodeRunner {
    *   - 完成事件由编排器监听 subagent/end 更新快照，本方法不等待执行结果。
    */
   async startNodeTask(input: NodeStartInput): Promise<{ childId: string; created: boolean; replacedChildId?: string }> {
-    const { childId, created, replacedChildId } = await this.ensureNodeChild(input)
-    // 每轮派发前刷新护栏上限与模型选择（节点级参数可按次覆盖；官方 selection 可变态）。
-    // 【时序】setLimit 必须位于任何 await 之前：子代理本轮第一步推理的 pre-step 事件
-    // 一旦触发就读 limits 表——若先派发再登记，新回合（可能换了 limit）的第一步
-    // 会读到旧上限/未登记值，软截停延迟生效（guards.ts 对 unknown childId 直接放行）。
-    this.deps.react.setLimit(childId, input.iterationLimit)
-    const subagents = this.requireSubagents()
-    const parent = this.requireParent(input.sessionId)
-    if (!created) {
-      // 复用子代理：相邻投递派发本轮任务（0.1.5-rc.1：sendMessage 优先，queuePrompt 兜底）
-      await this.deliverReuse(subagents, parent, childId, input.blocks, input.signal)
-    }
-    this.attachModelSelection(childId, input)
+    return this.withNodeDispatch(input, async () => {
+      let result = await this.ensureNodeChildUnlocked(input)
+      let { childId, created } = result
+      // 每轮派发前刷新护栏上限与模型选择（节点级参数可按次覆盖；官方 selection 可变态）。
+      // 【时序】setLimit 必须位于任何 await 之前：子代理本轮第一步推理的 pre-step 事件
+      // 一旦触发就读 limits 表——若先派发再登记，新回合（可能换了 limit）的第一步
+      // 会读到旧上限/未登记值，软截停延迟生效（guards.ts 对 unknown childId 直接放行）。
+      this.deps.react.setLimit(childId, input.iterationLimit)
+      const subagents = this.requireSubagents()
+      const parent = this.requireParent(input.sessionId)
+      if (!created) {
+        // 复用子代理：相邻投递派发本轮任务（0.1.5-rc.1：sendMessage 优先，queuePrompt 兜底）
+        this.assertActive(input)
+        try {
+          await this.deliverReuse(subagents, parent, childId, input.blocks, input.signal)
+        } catch (error) {
+          if (error instanceof Error) Object.assign(error, { childId })
+          // 官方 0.1.6 的 SubagentError/NOT_RESUMABLE 发生于 materialize，早于 inbox 接纳。
+          // queuePrompt 不具有这个公开保证；未知类型/错误码/已接纳后失败均不重建。
+          if (typeof subagents.sendMessage !== "function" || !(error instanceof Error)
+            || error.name !== "SubagentError" || !("code" in error) || error.code !== "NOT_RESUMABLE"
+            || ("accepted" in error && error.accepted !== false)) throw error
+          this.deps.logger?.warn(JSON.stringify({ runId: input.runId, nodeId: input.node.id, childId, attempt: input.attempt,
+            phase: "child_resume", errorCode: error.code, reason: presetErrorReason(error),
+            cause: error.cause === undefined ? undefined : presetErrorReason(error.cause), accepted: false }))
+          this.assertActive(input)
+          try {
+            // 单次重建，无循环；公共创建路径重新安装权限/提示词并提交最新 blocks。
+            result = await this.ensureNodeChildUnlocked(input, true)
+          } catch (creationError) {
+            this.deps.logger?.warn(JSON.stringify({ runId: input.runId, nodeId: input.node.id, childId, attempt: input.attempt,
+              phase: "child_rebuild", status: "fail", resumeCode: error.code, reason: presetErrorReason(creationError) }))
+            // 保留创建失败的稳定 code/cause，并另存原始投递异常供诊断。
+            if (creationError instanceof Error) Object.assign(creationError, { resumeError: error, childId })
+            throw creationError
+          }
+          childId = result.childId
+          created = result.created
+        }
+      }
+      this.attachModelSelection(childId, input)
       await this.attachPromptState(childId, input)
-    return replacedChildId === undefined ? { childId, created } : { childId, created, replacedChildId }
+      return result
+    })
   }
 
   /** 尽力中断子代理当前回合（保留会话；官方 interrupt 语义）。 */
@@ -690,6 +723,12 @@ export class NodeAgentRunner implements NodeRunner {
     } catch {
       // 已停止/不存在视为成功（旧项目语义）
     }
+  }
+
+  /** 宿主确认旧 Agent 已销毁后回收登记；存活期间保留护栏。 */
+  releaseRetiredChild(childId: string): void {
+    if (!this.childIds.delete(childId)) return
+    this.deps.react.drop(childId)
   }
 
   /** 清理子代理表与护栏登记（宿主 dispose 调用；不中断**存活**子代理——由运行时统一中止）。
@@ -750,8 +789,24 @@ export class NodeAgentRunner implements NodeRunner {
    * 时序：中断放在新 child 登记之后（登记先于中断，保证编排器先拿到 replaced 通知）。
    */
   async ensureNodeChild(input: NodeStartInput): Promise<{ childId: string; created: boolean; replacedChildId?: string }> {
-    const subagents = this.requireSubagents()
-    const parent = this.requireParent(input.sessionId)
+    return this.withNodeDispatch(input, () => this.ensureNodeChildUnlocked(input))
+  }
+
+  private async withNodeDispatch<T>(input: NodeStartInput, operation: () => Promise<T>): Promise<T> {
+    const key = childKey(input.sessionId, input.flowId, input.node.id)
+    if (this.dispatching.has(key)) throw Object.assign(new Error("该节点正在创建或投递任务"), { code: "WF_BUSY" })
+    this.dispatching.add(key)
+    try { this.assertActive(input); return await operation() } finally { this.dispatching.delete(key) }
+  }
+
+  private assertActive(input: NodeStartInput): void {
+    if (input.signal.aborted) throw Object.assign(new Error("节点派发已取消"), { code: "CANCELLED" })
+    input.assertActive?.()
+  }
+
+  private async ensureNodeChildUnlocked(input: NodeStartInput, recreate = false): Promise<{ childId: string; created: boolean; replacedChildId?: string }> {
+    this.requireSubagents()
+    this.requireParent(input.sessionId)
     const node = input.node as RoleNode
     const key = childKey(input.sessionId, input.flowId, node.id)
 
@@ -774,7 +829,18 @@ export class NodeAgentRunner implements NodeRunner {
     const injectToolSections = node.data?.injectToolSections !== false
     const signature = nodeChildSignature(node, tools, rolePrompt, injectSystemPrompt, injectToolSections, collabPrompt)
     const existing = this.nodeChildren.get(key)
-    if (existing && existing.signature === signature) return { childId: existing.childId, created: false }
+    this.assertActive(input)
+    if (!recreate && existing && existing.signature === signature) return { childId: existing.childId, created: false }
+    return this.createNodeChild(input, tools, signature, { systemPrompt: rolePrompt, injectSystemPrompt, injectToolSections })
+  }
+
+  /** 首次、配置变更与不可恢复重建共用创建窗口；成功才切换缓存。 */
+  private async createNodeChild(input: NodeStartInput, tools: string[], signature: string, promptState: ChildPromptState): Promise<{ childId: string; created: boolean; replacedChildId?: string }> {
+    this.assertActive(input)
+    const subagents = this.requireSubagents()
+    const parent = this.requireParent(input.sessionId)
+    const node = input.node as RoleNode
+    const key = childKey(input.sessionId, input.flowId, node.id)
 
     const provider = detectSubagentProvider(subagents)
     if (!provider) throw Object.assign(new Error("没有可用的隔离子代理 provider；请在 DSH profile 启用 @deepseek-ai/dsh-subagent-spawn-in-process 或安装支持隔离的 provider。fork 会继承父历史，不能用于独立节点"), { code: "WF_ISOLATED_PROVIDER_UNAVAILABLE", phase: "child_start", retryable: false })
@@ -782,11 +848,6 @@ export class NodeAgentRunner implements NodeRunner {
     if (node.data?.provider) agentOptions.provider = node.data.provider
     if (node.data?.model) agentOptions.model = node.data.model
 
-    const promptState: ChildPromptState = {
-      systemPrompt: rolePrompt,
-      injectSystemPrompt,
-      injectToolSections,
-    }
     // 【关键时序】每子代理作用域装配（角色提示词/工具可见性/模型选择/软截停）由 host 层
     // `agent/created` 处理器在子代理创建窗口内安装（该事件在 agents.create 发布、
     // 首轮 followup 组装之前串行 await 触发；此时 withPending 的 AsyncLocalStorage 状态仍在作用域内，
@@ -807,6 +868,12 @@ export class NodeAgentRunner implements NodeRunner {
       })
       return result
     }))
+    try { this.assertActive(input) } catch (error) {
+      void this.interruptChild(started.childId, input.sessionId).catch(() => {})
+      this.deps.react.drop(started.childId)
+      this.deps.retireChild?.(started.childId)
+      throw error
+    }
     this.deps.toolFilter.remember(started.childId, tools)
     const previous = this.nodeChildren.get(key)
     const replacedChildId = previous && previous.childId !== started.childId ? previous.childId : undefined
@@ -825,11 +892,11 @@ export class NodeAgentRunner implements NodeRunner {
     // 旧 child（被替换者）：登记已切换，旧 child 的软截停标记与护栏一并回收，
     // 再尽力中断其当前回合（保留会话；中断失败不影响新 child 的派发）。
     if (replacedChildId !== undefined) {
-      this.deps.react.drop(replacedChildId)
-      this.childIds.delete(replacedChildId)
+      this.deps.retireChild?.(replacedChildId)
       void this.interruptChild(replacedChildId, input.sessionId).catch(() => {
         // 中断是尽力而为（目标不存在/已停止视为成功）；startNodeTask 返回后不再观察
       })
+      if (!this.deps.agents()?.get(replacedChildId)) this.releaseRetiredChild(replacedChildId)
     }
     return replacedChildId === undefined
       ? { childId: started.childId, created: true }

@@ -8,11 +8,19 @@ import type { WorkflowDocument } from '../shared/graph-model.js'
 import { memberGroupId, nodeById } from '../graph/index.js'
 import { failureOf, lastAssistantText, setNodeStatus } from './snapshot.js'
 import { SUBAGENT_END_RETRY_DELAY_MS, SUBAGENT_END_RETRY_MAX } from './seams.js'
+import type { ChildMeta } from "./seams.js"
 import type { RunEntry, SubagentEndInfo } from './run-entry.js'
 import { RuntimeComm } from './runtime-comm.js'
 import { verifyNodeArtifacts } from './execution-inputs.js'
 
 export class RuntimeObserve extends RuntimeComm {
+  /** 仅接纳宿主已识别的 Workflow child，不把官方 epoch ID 当 Workflow runId。 */
+  handleSubagentStart(info: Pick<SubagentEndInfo, "id" | "runId">): void {
+    if (this.disposed || typeof info.id !== "string" || typeof info.runId !== "string" || !info.runId) return
+    if (this.childIndex.get(info.id)?.retired) return
+    this.childEpochs.set(info.id, info.runId)
+  }
+
   // ---- subagent/end 观察 ------------------------------------------------------
 
   /**
@@ -25,14 +33,14 @@ export class RuntimeObserve extends RuntimeComm {
    * 只观察 DSH 事件，不向父代理注入任何额外内容——父代理继续推进由官方汇报链路驱动。
    * 暂停中的运行（paused）同样回写节点状态（该节点确实完成了）。
    */
-  async handleSubagentEnd(info: SubagentEndInfo): Promise<void> {
+  async handleSubagentEnd(info: SubagentEndInfo, tries = 0): Promise<void> {
     const childId = String(info?.id ?? '')
     if (!childId) return
     const meta = this.childIndex.get(childId)
     // childIndex 尚未登记（极快完成/同步失败的子代理事件先于登记到达）：
     // 不能静默丢弃——否则 wait:true 等待器永久挂起、inflight 残留。有界重试等待登记。
     if (!meta) {
-      this.deferSubagentEnd(info, 0)
+      this.deferSubagentEnd(info, tries)
       return
     }
     // 已退役 child（同节点配置签名变化后被替换的旧子代理）：其事件**静默丢弃**。
@@ -52,8 +60,14 @@ export class RuntimeObserve extends RuntimeComm {
     for (const entry of this.runs.values()) {
       const s = entry.snapshot
       if (s.sessionId !== meta.sessionId || s.flowId !== meta.flowId) continue
-      entry.inflight.delete(childId)
-      entry.lastActiveAt = this.now()
+      const current = s.nodes.find((node) => node.nodeId === meta.nodeId)
+      if (current?.status === "running" && current.childId === undefined && entry.dispatching?.has(meta.nodeId)) {
+        // 冷恢复的同 ID 已有旧登记，新 epoch 可能在本次投递返回前结束。
+        this.deferSubagentEnd(info, tries)
+        return
+      }
+      if (typeof info.runId === "string" && meta.hostEpochId && info.runId !== meta.hostEpochId) return
+      if (!this.currentChild(entry, childId, meta)) continue
       if (s.status !== 'running' && s.status !== 'paused') return
       const stopReason = String(info?.stopReason ?? '')
       // max-tokens = 模型输出被硬截断（内容不完整），不能视为成功（Bug 19）；
@@ -61,14 +75,24 @@ export class RuntimeObserve extends RuntimeComm {
       let completed = stopReason === 'completed'
       let artifactFailure
       if (completed) {
-        const node = nodeById(await this.currentResolvedFlow(entry), meta.nodeId)
-        if (node?.kind === 'agent') {
-          try { await verifyNodeArtifacts(node, s, this.now()) } catch (error) {
-            completed = false
-            artifactFailure = failureOf(error, 'run_finish', 'WF_OUTPUT_FILE_MISSING', this.now())
+        try {
+          const node = nodeById(await this.currentResolvedFlow(entry), meta.nodeId)
+          if (!this.currentChild(entry, childId, meta)) return
+          if (node?.kind === "agent") {
+            // 检查期间可能发生重试/退役；先对捕获的代际副本验证，提交前再核对。
+            const verification = structuredClone(s)
+            await verifyNodeArtifacts(node, verification, this.now())
+            if (!this.currentChild(entry, childId, meta)) return
+            const record = s.nodes.find((n) => n.nodeId === meta.nodeId)
+            const artifacts = verification.nodes.find((n) => n.nodeId === meta.nodeId)?.artifacts
+            if (record && artifacts) record.artifacts = artifacts
           }
+        } catch (error) {
+          completed = false
+          artifactFailure = failureOf(error, "run_finish", "WF_OUTPUT_FILE_MISSING", this.now())
         }
       }
+      if (!this.currentChild(entry, childId, meta)) return
       if (s.status !== 'running' && s.status !== 'paused') return
       // 完整产出先取全量（limit=0 不截断），再由 setNodeStatus 按两套口径各自截断：
       //   - nodes[].output        ← config.outputFullLimit（默认 100KB；断点回填与下游 ctx 注入的读取源）
@@ -82,6 +106,9 @@ export class RuntimeObserve extends RuntimeComm {
       // P0-1：协作组成员回合结束 ≠ 终态完成——它在协作组内仍可被 wf_ask_agent 唤醒，
       // 落「armed/待命」中间态（显示为「等待」），避免被误判为终态 ok、组卡片提前 ok。
       const inGroup = completed && !reactCapped && (await this.isGroupMemberOf(entry, meta.nodeId))
+      if (!this.currentChild(entry, childId, meta)) return
+      entry.inflight.delete(childId)
+      entry.lastActiveAt = this.now()
       const finalStatus: 'ok' | 'armed' | 'react-capped' | 'fail' = completed
         ? (reactCapped ? 'react-capped' : (inGroup ? 'armed' : 'ok'))
         : 'fail'
@@ -111,6 +138,14 @@ export class RuntimeObserve extends RuntimeComm {
     }
   }
 
+  private currentChild(entry: RunEntry, childId: string, meta: ChildMeta): boolean {
+    if (this.childIndex.get(childId) !== meta || meta.retired || (meta.runId && entry.snapshot.id !== meta.runId)) return false
+    const node = entry.snapshot.nodes.find((record) => record.nodeId === meta.nodeId)
+    // 旧登记缺省代际仍兼容；新的代际必须三元组一致。
+    return !!node && (meta.attempt === undefined || node.attempts === meta.attempt)
+      && (node.childId === undefined ? meta.runId === undefined : node.childId === childId)
+  }
+
   /**
    * 迟到 subagent/end 有界重试：等待 childIndex 完成登记后重放事件。
    * 防御性兜底——正常路径事件必然晚于登记到达，重试一次即命中；
@@ -126,7 +161,7 @@ export class RuntimeObserve extends RuntimeComm {
       if (this.disposed) return
       const childId = String(info?.id ?? '')
       if (!childId) return
-      if (this.childIndex.has(childId)) void this.handleSubagentEnd(info)
+      if (this.childIndex.has(childId)) void this.handleSubagentEnd(info, tries + 1)
       else this.deferSubagentEnd(info, tries + 1)
     }, SUBAGENT_END_RETRY_DELAY_MS)
   }
