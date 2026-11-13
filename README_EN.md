@@ -327,7 +327,17 @@ dsh plugin --profile web remove dsh-visual-workflow
 7. Create an instance.
 8. Click Run.
 
-### Approach 2: Let the Agent Design the Organization
+### Approach 2: Import a Dify Workflow
+
+Click **Import** in the workbench and select a Dify `.yml` or `.yaml` export. The result is saved as a workflow template with a compatibility report:
+
+- `ready`: the structure was converted; review the template before production use.
+- `review-required`: models, tools, knowledge bases, HTTP integrations, or variables require rebinding.
+- `blocked`: loops, unknown nodes, or target-graph errors must be fixed before execution.
+
+Credentials and sensitive request headers are never migrated. See [Dify import guide](docs/dify-import.md).
+
+### Approach 3: Let the Agent Design the Organization
 
 In the main session, enter:
 
@@ -363,7 +373,7 @@ Run
 
 `/arrange` itself only injects planning instructions; it does not automatically run the workflow upon planning completion.
 
-### Approach 3: Runtime Manual Adjustment
+### Approach 4: Runtime Manual Adjustment
 
 After running a Workflow:
 
@@ -375,7 +385,7 @@ After running a Workflow:
 
 You can also use `pause` nodes in the flow to establish manual review points.
 
-### Approach 4: Agent Automatically Adjusts Organization During Runtime
+### Approach 5: Agent Automatically Adjusts Organization During Runtime
 
 When the parent agent discovers from runtime facts that the current organization is no longer suitable, it will call `wf_graph_patch` to modify the current instance itself:
 

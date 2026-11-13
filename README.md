@@ -290,7 +290,7 @@ node scripts/run-sales-live.mjs
 
 ## 安装（Windows）
 
-当前插件版本为 **1.0.0**；安装后核对插件 package.json 与生成 lib。运行输入、默认 explicit、主动 auto 配置及宿主访问控制的部署前置条件见 [运行输入说明](docs/runtime-input-handoff.md)。
+当前插件版本为 **1.1.0**；安装后核对插件 package.json 与生成 lib。运行输入、默认 explicit、主动 auto 配置及宿主访问控制的部署前置条件见 [运行输入说明](docs/runtime-input-handoff.md)。
 
 > **安装示例**：以下使用 **DeepSeek Harness `0.2.0-rc.2`**；旧版 `0.1.6-alpha.2` 的 Preset Scope 兼容范围与验收状态见上文。本次补丁不要求升级现有宿主。新安装可使用：
 >
@@ -359,7 +359,17 @@ dsh plugin --profile web remove dsh-visual-workflow
 7. 创建实例。
 8. 点击运行。
 
-### 方式二：让 Agent 设计组织
+### 方式二：导入 Dify 工作流
+
+点击工作台顶部「导入」，选择 Dify 导出的 `.yml` / `.yaml` 文件。导入结果落为工作流模板，并携带兼容报告：
+
+- `ready`：结构可转换，仍建议打开模板复核。
+- `review-required`：模型、工具、知识库、HTTP 或变量需要重新绑定。
+- `blocked`：包含循环、未知节点或目标图错误，修复前不能直接运行。
+
+凭据和敏感请求头不会从 Dify 文件迁移；导入器只保留脱敏配置。详见 [Dify 导入说明](docs/dify-import.md)。
+
+### 方式三：让 Agent 设计组织
 
 在主会话中输入：
 
@@ -395,7 +405,7 @@ wf_graph_patch
 
 `/arrange` 本身只负责注入规划指令，不会因为规划完成而自动运行工作流。
 
-### 方式三：运行中人工调整
+### 方式四：运行中人工调整
 
 运行 Workflow 后：
 
@@ -407,7 +417,7 @@ wf_graph_patch
 
 也可以在流程中使用 `暂停/pause` 节点建立人工审查点。
 
-### 方式四：Agent 在运行中自动调整组织
+### 方式五：Agent 在运行中自动调整组织
 
 父代理根据运行事实发现当前组织不再合适时会自己调用 `wf_graph_patch` 修改当前实例：
 
