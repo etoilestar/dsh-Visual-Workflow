@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/GZX2211/dsh-Visual-Workflow/main/assets/images/流程编排.png" alt="界面预览" width="100%" />
+  <img src="https://raw.githubusercontent.com/etoilestar/dsh-Visual-Workflow/main/assets/images/流程编排.png" alt="界面预览" width="100%" />
 </p>
 
 <h1 align="center">可视化 Agent 编排平台</h1>
@@ -20,7 +20,7 @@
   <a href="#"><img alt="pnpm" src="https://img.shields.io/badge/pnpm-11-orange"></a>
   <a href="#"><img alt="vitest" src="https://img.shields.io/badge/test-vitest-cyan"></a>
   <a href="#"><img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey"></a>
-  <a href="https://github.com/GZX2211/dsh-Visual-Workflow/releases"><img alt="version" src="https://img.shields.io/github/v/release/GZX2211/dsh-Visual-Workflow?label=version&color=0891b2&include_prereleases"></a>
+  <a href="https://github.com/etoilestar/dsh-Visual-Workflow/releases"><img alt="version" src="https://img.shields.io/github/v/release/etoilestar/dsh-Visual-Workflow?label=version&color=0891b2&include_prereleases"></a>
 </p>
 
 ---
@@ -290,7 +290,7 @@ node scripts/run-sales-live.mjs
 
 ## 安装（Windows）
 
-当前插件版本为 **0.11.0**；安装后核对插件 package.json 与生成 lib。运行输入、默认 explicit、主动 auto 配置及宿主访问控制的部署前置条件见 [运行输入说明](docs/runtime-input-handoff.md)。
+当前插件版本为 **1.0.0**；安装后核对插件 package.json 与生成 lib。运行输入、默认 explicit、主动 auto 配置及宿主访问控制的部署前置条件见 [运行输入说明](docs/runtime-input-handoff.md)。
 
 > **安装示例**：以下使用 **DeepSeek Harness `0.2.0-rc.2`**；旧版 `0.1.6-alpha.2` 的 Preset Scope 兼容范围与验收状态见上文。本次补丁不要求升级现有宿主。新安装可使用：
 >
@@ -311,7 +311,7 @@ allowBuilds:
 2. **运行插件安装命令**:
 
 ```bash
-dsh plugin --profile web add "github:GZX2211/dsh-Visual-Workflow#main"
+dsh plugin --profile web add "github:etoilestar/dsh-Visual-Workflow#main"
 ```
 
 3. **验证挂载**：（可选）
@@ -487,7 +487,7 @@ scheduler/                  # 定时任务定义与触发记录
 ## 本地开发
 
 ```bash
-git clone https://github.com/GZX2211/dsh-Visual-Workflow.git
+git clone https://github.com/etoilestar/dsh-Visual-Workflow.git
 cd dsh-visual-workflow
 pnpm install
 dsh plugin --profile web add "link:$PWD"

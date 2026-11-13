@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/GZX2211/dsh-Visual-Workflow/main/assets/images/流程编排.png" alt="UI Preview" width="100%" />
+  <img src="https://raw.githubusercontent.com/etoilestar/dsh-Visual-Workflow/main/assets/images/流程编排.png" alt="UI Preview" width="100%" />
 </p>
 
 <h1 align="center">Visual Agent Orchestration Platform</h1>
@@ -20,7 +20,7 @@
   <a href="#"><img alt="pnpm" src="https://img.shields.io/badge/pnpm-11-orange"></a>
   <a href="#"><img alt="vitest" src="https://img.shields.io/badge/test-vitest-cyan"></a>
   <a href="#"><img alt="license" src="https://img.shields.io/badge/license-MIT-lightgrey"></a>
-  <a href="https://github.com/GZX2211/dsh-Visual-Workflow/releases"><img alt="version" src="https://img.shields.io/github/v/release/GZX2211/dsh-Visual-Workflow?label=version&color=0891b2&include_prereleases"></a>
+  <a href="https://github.com/etoilestar/dsh-Visual-Workflow/releases"><img alt="version" src="https://img.shields.io/github/v/release/etoilestar/dsh-Visual-Workflow?label=version&color=0891b2&include_prereleases"></a>
 </p>
 
 ---
@@ -279,7 +279,7 @@ allowBuilds:
 2. **Run the plugin installation command**:
 
 ```bash
-dsh plugin --profile web add "github:GZX2211/dsh-Visual-Workflow#main"
+dsh plugin --profile web add "github:etoilestar/dsh-Visual-Workflow#main"
 ```
 
 3. **Verify mounting**: (optional)
@@ -453,7 +453,7 @@ Default values can be overridden in `cordis.patch.yml`:
 ## Local Development
 
 ```bash
-git clone https://github.com/GZX2211/dsh-Visual-Workflow.git
+git clone https://github.com/etoilestar/dsh-Visual-Workflow.git
 cd dsh-visual-workflow
 pnpm install
 dsh plugin --profile web add "link:$PWD"
