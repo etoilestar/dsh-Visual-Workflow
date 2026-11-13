@@ -114,7 +114,7 @@ export function Studio({ t, sessionId, remote: remoteProp, onRunImmersive }: Stu
         : currentFlow
           ? `${t.canvasCaptionInstance}${currentFlow.name ?? ''}`
           : ''
-  const importReport = currentFlowTemplate?.sourceImport
+  const importReport = currentFlowTemplate?.sourceImport ?? currentFlow?.sourceImport
   const canvasCaption = importReport
     ? `${canvasCaptionBase} · ${t.difyImportStatus[importReport.status]} (${importReport.issues.length})`
     : canvasCaptionBase

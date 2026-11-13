@@ -32,6 +32,7 @@ describe("Dify to DSH conversion", () => {
     })
 
     expect(converted.template.nodes.map((node) => node.kind)).toEqual(["start", "agent", "end"])
+    expect(converted.template.executionMode).toBe("dag")
     expect(converted.template.lines).toEqual([
       expect.objectContaining({ source: "start-node", target: "llm-node", sourceHandle: "flow-out", targetHandle: "flow-in" }),
       expect.objectContaining({ source: "llm-node", target: "answer-node", sourceHandle: "flow-out", targetHandle: "flow-in" }),
@@ -41,11 +42,51 @@ describe("Dify to DSH conversion", () => {
       data: {
         provider: "sample",
         model: "sample-model",
-        systemPrompt: expect.stringContaining("Question: {{#start-node.query#}}"),
+        systemPrompt: expect.stringContaining("Question: [运行输入「query」"),
+        execution: {
+          inputs: { query: { kind: "text", required: true } },
+          inputSource: "runtime",
+          retrySafe: true,
+        },
       },
     })
+    expect((converted.template.nodes[1] as { data: { systemPrompt: string } }).data.systemPrompt).not.toContain("{{#")
     expect(converted.report.status).toBe("review-required")
     expect(converted.template.sourceImport).toEqual(converted.report)
+  })
+
+  test("test_convert_non_adjacent_agent_reference_adds_explicit_context_dependency", async () => {
+    const parsed = parseDifyWorkflow(await fixture("basic-llm.yml"))
+    const answerIndex = parsed.workflow.nodes.findIndex((node) => node.id === "answer-node")
+    parsed.workflow.nodes.splice(answerIndex, 0, {
+      id: "review-node",
+      semanticKind: "llm",
+      title: "Reviewer",
+      config: {
+        model: { provider: "sample", name: "sample-model" },
+        prompt_template: [{ role: "user", text: "Review {{#llm-node.text#}} for {{#start-node.query#}}" }],
+      },
+      inputs: [{ name: "llm-node.text", references: [{ sourceNodeId: "llm-node", sourcePort: "text" }] }, { name: "start-node.query", references: [{ sourceNodeId: "start-node", sourcePort: "query" }] }],
+      outputs: [],
+      source: { platform: "dify", type: "llm", raw: {} },
+    })
+    parsed.workflow.edges.splice(1, 1,
+      { id: "edge-review", sourceNodeId: "llm-node", targetNodeId: "review-node" },
+      { id: "edge-answer", sourceNodeId: "review-node", targetNodeId: "answer-node" },
+    )
+    parsed.workflow.nodes[parsed.workflow.nodes.findIndex((node) => node.id === "answer-node")].config.answer = "{{#review-node.text#}}"
+
+    const converted = convertDifyWorkflow(parsed.workflow, parsed.capabilities, { id: "tpl-context" })
+    expect(converted.template.lines).toContainEqual(expect.objectContaining({
+      source: "llm-node",
+      target: "review-node",
+      sourceHandle: "ctx-out",
+      targetHandle: "ctx-in",
+    }))
+    expect(converted.template.nodes[2]).toMatchObject({
+      kind: "agent",
+      data: { execution: { inputs: { query: { kind: "text", required: true } } } },
+    })
   })
 
   test("test_convert_unknown_node_keeps_placeholder_and_blocks_direct_run", async () => {

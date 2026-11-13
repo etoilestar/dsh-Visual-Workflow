@@ -361,11 +361,11 @@ dsh plugin --profile web remove dsh-visual-workflow
 
 ### 方式二：导入 Dify 工作流
 
-点击工作台顶部「导入」，选择 Dify 导出的 `.yml` / `.yaml` 文件。导入结果落为工作流模板，并携带兼容报告：
+点击工作台顶部「导入」，选择 Dify 导出的 `.yml` / `.yaml` 文件。导入结果落为工作流模板，并携带兼容报告。Start → LLM/Agent → 直通 Answer/End 子集会转换为确定性 DAG：创建实例、核对模型、填写运行输入后即可运行。
 
 - `ready`：结构可转换，仍建议打开模板复核。
-- `review-required`：模型、工具、知识库、HTTP 或变量需要重新绑定。
-- `blocked`：包含循环、未知节点或目标图错误，修复前不能直接运行。
+- `review-required`：通常需要核对/重新选择模型，并在运行时填写由 Dify Start 变量生成的输入。
+- `blocked`：包含工具、知识库、HTTP、代码、模板转换、条件、循环、迭代、未知节点或非直通结束语义；Host 会在派发前拒绝运行。
 
 凭据和敏感请求头不会从 Dify 文件迁移；导入器只保留脱敏配置。详见 [Dify 导入说明](docs/dify-import.md)。
 

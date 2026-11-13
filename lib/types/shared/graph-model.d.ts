@@ -370,6 +370,8 @@ export interface WorkflowDocument extends WorkflowExecutionOptions {
     name: string;
     /** 工作流描述（可编辑）。 */
     description: string;
+    /** 外部平台导入来源与兼容报告；从模板实例化时保留，供运行前护栏与画布提示使用。 */
+    sourceImport?: WorkflowImportMetadata;
     /** 节点列表（全量内联，判别联合）。 */
     nodes: GraphNode[];
     /** 连线列表（全量内联）。 */
