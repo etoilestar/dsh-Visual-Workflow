@@ -1,0 +1,32 @@
+name: verify-v1.1.1
+
+on:
+  push:
+    branches:
+      - codex-v1.1.1-dify-detection
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm vitest run tests/host/transfer/import-workflow.test.ts tests/host/api/runs.test.ts tests/host/importer/source/dify/parser.test.ts tests/host/importer/target/dsh/convert.test.ts tests/contract/package-contract.test.ts
+      - run: pnpm build
+      - run: pnpm client-smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v111-lib
+          path: lib
+          if-no-files-found: error
