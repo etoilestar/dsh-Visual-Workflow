@@ -1,7 +1,28 @@
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Context } from "@deepseek-ai/cordis"
-import type { MigratedModelPackageManifest, MigratedModelProviderSpec } from "./types.js"
+import {
+  MIGRATED_XINFERENCE_MODEL_TYPES,
+  type MigratedEmbeddingRequest,
+  type MigratedEmbeddingResult,
+  type MigratedModelPackageManifest,
+  type MigratedModelProviderSpec,
+  type MigratedModelTarget,
+  type MigratedModelType,
+  type MigratedRerankRequest,
+  type MigratedRerankResult,
+  type MigratedSpeechToTextRequest,
+  type MigratedSpeechToTextResult,
+  type MigratedTextToSpeechRequest,
+  type MigratedTextToSpeechResult,
+} from "./types.js"
+import {
+  invokeXinferenceEmbeddings,
+  invokeXinferenceRerank,
+  invokeXinferenceSpeechToText,
+  invokeXinferenceTextToSpeech,
+  type XinferenceConnection,
+} from "./xinference-capabilities.js"
 
 interface LoadedProvider {
   manifest: MigratedModelPackageManifest
@@ -120,12 +141,13 @@ export class MigratedModelRegistry {
   register(ctx: Context): void {
     const service = ctx.get("llm") as LlmServiceLike | null | undefined
     this.disposeRegistrations()
+    const llmProviders = this.activeProviders().filter(({ provider }) => provider.supportedModelTypes.includes("llm"))
+    if (llmProviders.length === 0) return
     if (!service || typeof service.registerAdapter !== "function") {
-      if (this.providers.size > 0) throw new Error("DSH llm service unavailable while migrated models are installed")
-      return
+      throw new Error("DSH llm service unavailable while migrated LLM models are installed")
     }
-    for (const loaded of this.activeProviders()) {
-      const credentials = resolveCredentials(loaded.provider, this.credentials[loaded.manifest.id] ?? {})
+    for (const loaded of llmProviders) {
+      const credentials = resolveCapabilityCredentials(loaded.provider, this.credentials[loaded.manifest.id] ?? {}, "llm")
       const missing = missingCredentials(loaded.provider, credentials)
       if (missing.length > 0) {
         ctx.logger.warn(`[visual-workflow] migrated model ${loaded.provider.ref} is not selectable until credentials are configured: ${missing.join(", ")}`)
@@ -144,18 +166,73 @@ export class MigratedModelRegistry {
     for (const dispose of this.disposers.splice(0)) dispose()
   }
 
-  list(): Array<{ ref: string; label: string; packageId: string; version: string; origin: "dify" }> {
+  list(): Array<{
+    ref: string
+    label: string
+    packageId: string
+    version: string
+    origin: "dify"
+    supportedModelTypes: string[]
+    configuredModelTypes: MigratedModelType[]
+  }> {
     return this.activeProviders().map(({ provider, manifest }) => ({
       ref: provider.ref,
       label: provider.label,
       packageId: manifest.id,
       version: manifest.version,
       origin: "dify",
+      supportedModelTypes: [...provider.supportedModelTypes],
+      configuredModelTypes: MIGRATED_XINFERENCE_MODEL_TYPES.filter((type) =>
+        provider.supportedModelTypes.includes(type)
+          && missingCredentials(provider, resolveCapabilityCredentials(provider, this.credentials[manifest.id] ?? {}, type)).length === 0),
     }))
+  }
+
+  hasConfigured(type: MigratedModelType, provider?: string): boolean {
+    return this.configuredCandidates(type, provider).length > 0
+  }
+
+  async embed(request: MigratedEmbeddingRequest): Promise<MigratedEmbeddingResult> {
+    return invokeXinferenceEmbeddings(this.resolveTarget("text-embedding", request), request)
+  }
+
+  async rerank(request: MigratedRerankRequest): Promise<MigratedRerankResult> {
+    return invokeXinferenceRerank(this.resolveTarget("rerank", request), request)
+  }
+
+  async speechToText(request: MigratedSpeechToTextRequest): Promise<MigratedSpeechToTextResult> {
+    return invokeXinferenceSpeechToText(this.resolveTarget("speech2text", request), request)
+  }
+
+  async textToSpeech(request: MigratedTextToSpeechRequest): Promise<MigratedTextToSpeechResult> {
+    return invokeXinferenceTextToSpeech(this.resolveTarget("tts", request), request)
   }
 
   private activeProviders(): LoadedProvider[] {
     return [...this.providers.values()].flatMap((versions) => versions[0] ? [versions[0]] : [])
+  }
+
+  private configuredCandidates(type: MigratedModelType, provider?: string): Array<{
+    loaded: LoadedProvider
+    credentials: Record<string, unknown>
+  }> {
+    return this.activeProviders().flatMap((loaded) => {
+      if (!loaded.provider.supportedModelTypes.includes(type) || (provider && loaded.provider.ref !== provider)) return []
+      const credentials = resolveCapabilityCredentials(loaded.provider, this.credentials[loaded.manifest.id] ?? {}, type)
+      return missingCredentials(loaded.provider, credentials).length === 0 ? [{ loaded, credentials }] : []
+    })
+  }
+
+  private resolveTarget(type: Exclude<MigratedModelType, "llm">, target: MigratedModelTarget): XinferenceConnection {
+    const candidates = this.configuredCandidates(type, target.provider)
+    if (candidates.length === 0) {
+      throw new Error(`未配置可用的 Xinference ${type} 模型${target.provider ? `：${target.provider}` : ""}`)
+    }
+    const matched = target.model
+      ? candidates.find(({ credentials }) => credentialText(credentials.model_uid) === target.model)
+      : candidates[0]
+    if (!matched) throw new Error(`Xinference ${type} 模型未配置：${target.model}`)
+    return connectionFor(matched.loaded, matched.credentials)
   }
 }
 
@@ -543,6 +620,29 @@ function resolveCredentials(provider: MigratedModelProviderSpec, configured: Rec
   return resolved
 }
 
+function resolveCapabilityCredentials(
+  provider: MigratedModelProviderSpec,
+  configured: Record<string, unknown>,
+  type: MigratedModelType,
+): Record<string, unknown> {
+  const shared = Object.fromEntries(Object.entries(configured).filter(([name]) => name !== "models"))
+  if (type !== "llm") delete shared.model_uid
+  const models = isRecord(configured.models) ? configured.models : {}
+  const scoped = isRecord(models[type]) ? models[type] : {}
+  return resolveCredentials(provider, { ...shared, ...scoped })
+}
+
+function connectionFor(loaded: LoadedProvider, credentials: Record<string, unknown>): XinferenceConnection {
+  const configuredTimeout = positiveNumber(credentials.invoke_timeout)
+  return {
+    provider: loaded.provider.ref,
+    serverUrl: requiredCredential(credentials, "server_url", loaded.provider.ref),
+    modelUid: requiredCredential(credentials, "model_uid", loaded.provider.ref),
+    ...(credentialText(credentials.api_key) ? { apiKey: credentialText(credentials.api_key) } : {}),
+    timeoutMs: configuredTimeout === undefined ? loaded.manifest.runtime.timeoutMs : configuredTimeout * 1_000,
+  }
+}
+
 function missingCredentials(provider: MigratedModelProviderSpec, credentials: Record<string, unknown>): string[] {
   return provider.credentials
     .filter((credential) => credential.required && !credentialText(credentials[credential.name]))
@@ -581,7 +681,9 @@ async function readManifest(path: string): Promise<MigratedModelPackageManifest>
   }
   const manifest = value as unknown as MigratedModelPackageManifest
   if (manifest.providers.some((provider) => !provider.ref.startsWith("dsh_model__")
-    || provider.adapter !== "xinference-openai-compatible" || !Array.isArray(provider.credentials))) {
+    || provider.adapter !== "xinference-openai-compatible" || !Array.isArray(provider.credentials)
+    || !Array.isArray(provider.supportedModelTypes)
+    || provider.supportedModelTypes.some((type) => typeof type !== "string" || !MIGRATED_XINFERENCE_MODEL_TYPES.includes(type as MigratedModelType)))) {
     throw new Error(`无效的 DSH 迁移模型声明：${path}`)
   }
   return manifest

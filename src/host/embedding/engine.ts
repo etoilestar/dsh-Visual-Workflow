@@ -5,9 +5,10 @@
 // 来源优先级（配置/资产驱动）：
 //   1. remote —— 配置了外部 OpenAI 兼容 /embeddings 端点（embeddingEndpoint）时
 //      优先使用（需求：可配置外部嵌入端点优先）；
-//   2. local —— 本地 bge-small-zh-v1.5 ONNX 量化资产经 transformers.js 推理
+//   2. migrated —— 已配置的迁移 Xinference text-embedding 模型；
+//   3. local —— 本地 bge-small-zh-v1.5 ONNX 量化资产经 transformers.js 推理
 //      （CPU；随包分发约 25MB，见 assets/models/bge-small-zh-v1.5）；
-//   3. bm25 —— 资产缺失/加载失败时降级：engine 不再提供向量，调用方（索引器）
+//   4. bm25 —— 资产缺失/加载失败时降级：engine 不再提供向量，调用方（索引器）
 //      自动改用 BM25 相似度检索并在结果中标注「非语义」。
 //
 // 为什么惰性加载：transformers.js 及其 onnxruntime 后端是重依赖，仅在真正
@@ -25,7 +26,7 @@
 import { fileURLToPath } from 'node:url'
 
 /** 嵌入来源：local 本地模型 / remote 外部端点 / bm25 降级（无向量能力）。 */
-export type EmbeddingSource = 'local' | 'remote' | 'bm25'
+export type EmbeddingSource = 'local' | 'remote' | 'migrated' | 'bm25'
 
 /** 嵌入引擎接口（索引器/数据工具依赖；单测可注入 fake）。 */
 export interface EmbeddingEngine {
@@ -87,6 +88,11 @@ export interface EmbeddingServiceOptions {
   logger?: { warn(message: string): void }
   /** fetch 实现注入（单测远程端点用；缺省全局 fetch）。 */
   fetchImpl?: typeof fetch
+  /** 已安装迁移模型的动态能力缝；显式 endpoint 仍拥有更高优先级。 */
+  migrated?: {
+    available(): boolean
+    embed(texts: readonly string[]): Promise<readonly (readonly number[])[]>
+  }
   /**
    * 本地 extractor 加载缝（单测用受控加载：验证并发单飞与释放竞态）。
    * 缺省走真实路径：资产快速失败校验 + 动态 import transformers.js。
@@ -119,6 +125,23 @@ export class EmbeddingService implements EmbeddingEngine {
    */
   async ensureReady(): Promise<EmbeddingSource> {
     if (this.disposed) return this.source
+    if (!this.options.endpoint && this.options.migrated?.available()) {
+      if (this.source !== 'migrated') {
+        ;(this as { dimension: number }).dimension = 0
+      }
+      ;(this as { source: EmbeddingSource }).source = 'migrated'
+      return this.source
+    }
+    if (this.source === 'migrated') {
+      if (this.local) {
+        ;(this as { source: EmbeddingSource }).source = 'local'
+        ;(this as { dimension: number }).dimension = 512
+        return this.source
+      }
+      this.readyPromise = null
+      ;(this as { source: EmbeddingSource }).source = 'bm25'
+      ;(this as { dimension: number }).dimension = 0
+    }
     this.readyPromise ??= this.prepare()
     return this.readyPromise
   }
@@ -131,6 +154,19 @@ export class EmbeddingService implements EmbeddingEngine {
     if (this.disposed) throw new Error('嵌入引擎已释放')
     if (this.source === 'remote') {
       return this.embedRemote(texts)
+    }
+    if (this.source === 'migrated' && this.options.migrated) {
+      const rows = await this.options.migrated.embed(texts)
+      if (rows.length !== texts.length) {
+        throw new Error(`迁移嵌入模型返回数量不符（期望 ${texts.length}，实际 ${rows.length}）`)
+      }
+      const vectors = rows.map((row) => normalizeVector(Array.from(row)))
+      const dimension = vectors[0]?.length ?? 0
+      if (dimension <= 0 || vectors.some((vector) => vector.length !== dimension)) {
+        throw new Error('迁移嵌入模型返回的向量维度无效')
+      }
+      ;(this as { dimension: number }).dimension = dimension
+      return vectors
     }
     if (this.source === 'local' && this.local) {
       return this.embedLocal(texts)

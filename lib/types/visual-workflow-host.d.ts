@@ -44,7 +44,7 @@ export declare class VisualWorkflowHost extends Service {
     readonly toolSwitches: ToolSwitchStore;
     /** Dify 来源包已统一转换后的 DSH 标准工具注册表。 */
     readonly migratedTools: MigratedToolRegistry;
-    /** Dify Model Provider 转换后的 DSH LLM adapter 注册表。 */
+    /** Dify Model Provider 转换后的 LLM 与 Visual 模型能力注册表。 */
     readonly migratedModels: MigratedModelRegistry;
     /** Dify 包上传、转换与安装能力；执行完成后刷新统一 DSH 工具注册表。 */
     readonly migratedToolMigration: MigratedToolMigrationService;
@@ -81,7 +81,7 @@ export declare class VisualWorkflowHost extends Service {
      * 条目为极小字符串、会话内数量有限，仅随宿主 dispose 统一清理即可。
      */
     private readonly childPromptStates;
-    /** 本地嵌入引擎（外部端点 > 本地资产 > BM25 降级；惰性加载）。 */
+    /** 嵌入引擎（显式端点 > 迁移模型 > 本地资产 > BM25；惰性加载）。 */
     private readonly embedding;
     /** 已清理标记（dispose 后为 true；重复 dispose 幂等）。 */
     private _disposed;

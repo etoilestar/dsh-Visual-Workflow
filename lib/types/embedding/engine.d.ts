@@ -1,5 +1,5 @@
 /** 嵌入来源：local 本地模型 / remote 外部端点 / bm25 降级（无向量能力）。 */
-export type EmbeddingSource = 'local' | 'remote' | 'bm25';
+export type EmbeddingSource = 'local' | 'remote' | 'migrated' | 'bm25';
 /** 嵌入引擎接口（索引器/数据工具依赖；单测可注入 fake）。 */
 export interface EmbeddingEngine {
     /** 当前来源。 */
@@ -38,6 +38,11 @@ export interface EmbeddingServiceOptions {
     };
     /** fetch 实现注入（单测远程端点用；缺省全局 fetch）。 */
     fetchImpl?: typeof fetch;
+    /** 已安装迁移模型的动态能力缝；显式 endpoint 仍拥有更高优先级。 */
+    migrated?: {
+        available(): boolean;
+        embed(texts: readonly string[]): Promise<readonly (readonly number[])[]>;
+    };
     /**
      * 本地 extractor 加载缝（单测用受控加载：验证并发单飞与释放竞态）。
      * 缺省走真实路径：资产快速失败校验 + 动态 import transformers.js。

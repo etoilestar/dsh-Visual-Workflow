@@ -174,6 +174,93 @@ describe("MigratedModelRegistry", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("server_url"))
     registry.disposeRegistrations()
   })
+
+  it("test_invoke_embedding_rerank_speech2text_and_tts_with_scoped_model_credentials", async () => {
+    const requests: Array<{ url: string; authorization?: string; body: string }> = []
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = []
+      request.on("data", (chunk: Buffer) => chunks.push(chunk))
+      request.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8")
+        requests.push({ url: request.url ?? "", authorization: request.headers.authorization, body })
+        if (request.url === "/v1/embeddings") {
+          response.writeHead(200, { "Content-Type": "application/json" })
+          response.end(JSON.stringify({
+            data: [{ index: 0, embedding: [3, 4] }, { index: 1, embedding: [0, 2] }],
+            usage: { prompt_tokens: 3, total_tokens: 3 },
+          }))
+          return
+        }
+        if (request.url === "/v1/rerank") {
+          response.writeHead(200, { "Content-Type": "application/json" })
+          response.end(JSON.stringify({ results: [
+            { index: 1, relevance_score: 0.9, document: { text: "second" } },
+            { index: 0, relevance_score: 0.2, document: { text: "first" } },
+          ] }))
+          return
+        }
+        if (request.url === "/v1/audio/transcriptions") {
+          response.writeHead(200, { "Content-Type": "application/json" })
+          response.end(JSON.stringify({ text: "transcribed audio" }))
+          return
+        }
+        if (request.url === "/v1/audio/speech") {
+          response.writeHead(200, { "Content-Type": "audio/mpeg" })
+          response.end(Buffer.from([1, 2, 3, 4]))
+          return
+        }
+        response.writeHead(404).end()
+      })
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("test server did not expose a port")
+
+    const root = await createInstalledPackage({
+      server_url: `http://127.0.0.1:${address.port}`,
+      api_key: "secret-value",
+      models: {
+        "text-embedding": { model_uid: "bge-test" },
+        rerank: { model_uid: "rerank-test" },
+        speech2text: { model_uid: "whisper-test" },
+        tts: { model_uid: "cosyvoice-test" },
+      },
+    })
+    const registry = new MigratedModelRegistry(root)
+    await registry.load()
+
+    expect(registry.hasConfigured("text-embedding")).toBe(true)
+    expect(registry.list()[0]?.configuredModelTypes).toEqual(["text-embedding", "rerank", "speech2text", "tts"])
+    await expect(registry.embed({ texts: ["first", "second"] })).resolves.toMatchObject({
+      model: "bge-test",
+      embeddings: [[3, 4], [0, 2]],
+      usage: { promptTokens: 3, totalTokens: 3 },
+    })
+    await expect(registry.rerank({ query: "query", documents: ["first", "second"], scoreThreshold: 0.5 })).resolves.toMatchObject({
+      model: "rerank-test",
+      results: [{ index: 1, text: "second", score: 0.9 }],
+    })
+    await expect(registry.speechToText({
+      audio: Uint8Array.from([1, 2, 3]),
+      fileName: "sample.wav",
+      contentType: "audio/wav",
+      language: "zh",
+    })).resolves.toMatchObject({ model: "whisper-test", text: "transcribed audio" })
+    const speech = await registry.textToSpeech({ input: "hello", voice: "中文女", responseFormat: "mp3" })
+    expect(speech).toMatchObject({ model: "cosyvoice-test", contentType: "audio/mpeg" })
+    expect([...speech.audio]).toEqual([1, 2, 3, 4])
+
+    expect(requests.map((item) => item.url)).toEqual([
+      "/v1/embeddings", "/v1/rerank", "/v1/audio/transcriptions", "/v1/audio/speech",
+    ])
+    expect(requests.every((item) => item.authorization === "Bearer secret-value")).toBe(true)
+    expect(JSON.parse(requests[0]!.body)).toMatchObject({ model: "bge-test", input: ["first", "second"] })
+    expect(JSON.parse(requests[1]!.body)).toMatchObject({ model: "rerank-test", query: "query", return_documents: true })
+    expect(requests[2]!.body).toContain("whisper-test")
+    expect(requests[2]!.body).toContain("sample.wav")
+    expect(JSON.parse(requests[3]!.body)).toMatchObject({ model: "cosyvoice-test", input: "hello", voice: "中文女" })
+  })
 })
 
 async function createInstalledPackage(credentials: Record<string, unknown>): Promise<string> {
@@ -202,7 +289,7 @@ async function createInstalledPackage(credentials: Record<string, unknown>): Pro
       label: "Xorbits Inference",
       description: "Xinference migrated from Dify",
       adapter: "xinference-openai-compatible",
-      supportedModelTypes: ["llm"],
+      supportedModelTypes: ["llm", "text-embedding", "rerank", "speech2text", "tts"],
       credentials: [
         { name: "server_url", label: "Server URL", type: "text-input", required: true, secret: false },
         { name: "model_uid", label: "Model UID", type: "text-input", required: true, secret: false },

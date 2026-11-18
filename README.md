@@ -361,7 +361,7 @@ dsh plugin --profile web remove dsh-visual-workflow
 
 ### 方式二：导入 Dify 工作流
 
-点击工作台顶部「导入」，选择 Dify 导出的 `.yml` / `.yaml` 文件。导入结果落为工作流模板，并携带兼容报告。Start、LLM/Agent、已迁移 Tool、Xinference LLM 与受控 End 输出会转换为确定性 DAG：创建实例、核对模型、填写运行输入后即可运行。
+点击工作台顶部「导入」，选择 Dify 导出的 `.yml` / `.yaml` 文件。导入结果落为工作流模板，并携带兼容报告。Start、LLM/Agent、已迁移 Tool、Xinference 模型与受控 End 输出会转换为确定性 DAG：创建实例、核对模型、填写运行输入后即可运行。迁移的 text-embedding 会进入现有向量索引链路，rerank、speech2text 与 TTS 由 Host 迁移模型能力面提供。
 
 - `ready`：结构可转换，仍建议打开模板复核。
 - `review-required`：通常需要核对/重新选择模型，并在运行时填写由 Dify Start 变量生成的输入。

@@ -1,6 +1,6 @@
 // tests/host/embedding/engine.test.ts
 //
-// 本地嵌入引擎单测（T-025）：来源选择（外部端点 > 本地资产 > BM25 降级）、
+// 本地嵌入引擎单测（T-025）：来源选择（外部端点 > 迁移模型 > 本地资产 > BM25 降级）、
 // 归一化纯函数，以及宿主全局共享引擎的并发单飞与释放竞态。
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -22,6 +22,20 @@ async function tempDir(prefix: string): Promise<string> {
 }
 
 describe('EmbeddingService 来源选择', () => {
+  it('已配置迁移模型 → source=migrated，embed 使用动态能力并归一化', async () => {
+    const embed = vi.fn(async () => [[3, 4], [0, 2]])
+    const service = new EmbeddingService({ migrated: { available: () => true, embed } })
+
+    expect(await service.ensureReady()).toBe('migrated')
+    const vectors = await service.embed(['a', 'b'])
+
+    expect(embed).toHaveBeenCalledWith(['a', 'b'])
+    expect(service.dimension).toBe(2)
+    expect(vectors[0][0]).toBeCloseTo(0.6)
+    expect(vectors[0][1]).toBeCloseTo(0.8)
+    service.dispose()
+  })
+
   it('配置外部端点 → source=remote，embed 经 fetch 调用并归一化', async () => {
     const fetchImpl = vi.fn(async () => ({
       ok: true,

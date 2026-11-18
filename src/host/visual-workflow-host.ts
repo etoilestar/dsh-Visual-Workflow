@@ -91,7 +91,7 @@ export class VisualWorkflowHost extends Service {
   readonly toolSwitches: ToolSwitchStore
   /** Dify 来源包已统一转换后的 DSH 标准工具注册表。 */
   readonly migratedTools: MigratedToolRegistry
-  /** Dify Model Provider 转换后的 DSH LLM adapter 注册表。 */
+  /** Dify Model Provider 转换后的 LLM 与 Visual 模型能力注册表。 */
   readonly migratedModels: MigratedModelRegistry
   /** Dify 包上传、转换与安装能力；执行完成后刷新统一 DSH 工具注册表。 */
   readonly migratedToolMigration: MigratedToolMigrationService
@@ -128,7 +128,7 @@ export class VisualWorkflowHost extends Service {
    * 条目为极小字符串、会话内数量有限，仅随宿主 dispose 统一清理即可。
    */
   private readonly childPromptStates = new Map<string, ChildPromptState>()
-  /** 本地嵌入引擎（外部端点 > 本地资产 > BM25 降级；惰性加载）。 */
+  /** 嵌入引擎（显式端点 > 迁移模型 > 本地资产 > BM25；惰性加载）。 */
   private readonly embedding: EmbeddingService
   /** 已清理标记（dispose 后为 true；重复 dispose 幂等）。 */
   private _disposed = false
@@ -165,6 +165,10 @@ export class VisualWorkflowHost extends Service {
       modelDir: config.embeddingModelDir,
       endpoint: config.embeddingEndpoint,
       logger: { warn: (message) => ctx.logger.warn(message) },
+      migrated: {
+        available: () => this.migratedModels.hasConfigured("text-embedding"),
+        embed: async (texts) => (await this.migratedModels.embed({ texts })).embeddings,
+      },
     })
     this.runner = new NodeAgentRunner({
       store: this.store,
@@ -476,7 +480,7 @@ export class VisualWorkflowHost extends Service {
     // 数据目录结构初始化（幂等）
     await this.store.init()
 
-    // 迁移能力只进入 DSH 官方工具/模型注册面；不建立第二套用户可见目录。
+    // 迁移 LLM 进入 DSH 官方模型注册面；其它模型类型由本 Host 的迁移模型能力面持有。
     await this.migratedTools.load()
     this.migratedTools.register(this.ctx)
     await this.migratedModels.load()

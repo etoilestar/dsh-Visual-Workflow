@@ -34,7 +34,7 @@
 - 知识检索、HTTP、代码、模板转换、条件、循环、迭代和未知节点仍会保留为可见占位，兼容状态为 `blocked`，不能直接运行。
 - Dify Flow 连线转换为原生 Flow 连线；固定图使用 `executionMode: dag`，不再由父模型临场猜测执行顺序。
 
-转换器不会声称两种平台的节点具有天然等价语义。v1.4 的可运行范围为 Start、LLM/Agent、已安装的 Dify Tool、Xinference LLM 迁移包，以及受控 Answer/End 输出绑定；Xinference 的 embedding、rerank、TTS、STT 和视觉输入暂不启用，其余能力等待后续适配器实现。
+转换器不会声称两种平台的节点具有天然等价语义。v1.4 的可运行范围为 Start、LLM/Agent、已安装的 Dify Tool、Xinference 迁移包，以及受控 Answer/End 输出绑定。Xinference LLM 进入 DSH 官方模型路由；text-embedding 接入 Visual 的向量索引引擎；rerank、speech2text 和 TTS 由 `VisualWorkflowHost.migratedModels` 提供有界、可取消的调用能力。视觉输入和其他模型提供商仍等待专用适配器。
 
 ## 安全规则
 
@@ -48,14 +48,20 @@ Xinference 凭据示例：
 {
   "dsh_dify__langgenius__xinference": {
     "server_url": "http://127.0.0.1:9997",
-    "model_uid": "qwen-chat",
     "api_key": "按需填写",
-    "invoke_timeout": "60"
+    "invoke_timeout": "60",
+    "models": {
+      "llm": { "model_uid": "qwen-chat" },
+      "text-embedding": { "model_uid": "bge-m3" },
+      "rerank": { "model_uid": "bge-reranker-v2-m3" },
+      "speech2text": { "model_uid": "whisper-large-v3" },
+      "tts": { "model_uid": "CosyVoice-300M" }
+    }
   }
 }
 ```
 
-`server_url` 填 Xinference 服务根地址，不要附加 `/v1`；适配器会调用 `/v1/chat/completions`。
+`server_url` 填 Xinference 服务根地址，不要附加 `/v1`。不同类型必须配置各自真实部署的 `model_uid`，共享根级 `server_url`、`api_key` 与超时。旧版根级 `model_uid` 仍作为 LLM 配置读取。适配器分别调用 `/v1/chat/completions`、`/v1/embeddings`、`/v1/rerank`、`/v1/audio/transcriptions` 与 `/v1/audio/speech`。
 
 ## 身份与安装目录
 
