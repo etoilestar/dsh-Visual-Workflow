@@ -10,7 +10,13 @@ export interface DifyToolMigrationPackageResult {
     version?: string;
     disposition?: string;
     tools?: string[];
+    providers?: string[];
     credentials?: string[];
+    issues?: Array<{
+        code: string;
+        severity: "info" | "warning" | "error";
+        message: string;
+    }>;
     error?: {
         code: string;
         message: string;

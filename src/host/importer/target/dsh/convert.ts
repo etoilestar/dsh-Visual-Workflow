@@ -97,7 +97,7 @@ function convertNode(node: SourceNodeIR, index: number, source: SourceWorkflowIR
   if (node.semanticKind === "tool") return convertToolNode(node, position, issues)
 
   const model = recordOf(node.config.model)
-  const provider = stringOf(model?.provider) ?? ""
+  const provider = migratedModelProviderRef(stringOf(model?.provider)) ?? ""
   const modelName = stringOf(model?.name) ?? ""
   if ((node.semanticKind === "llm" || node.semanticKind === "agent") && (!provider || !modelName)) {
     issues.push(issueOf(node, "DIFY_MODEL_REBIND_REQUIRED", "warning", "该节点缺少可直接使用的模型映射，请在运行前重新选择模型。"))
@@ -176,6 +176,13 @@ function convertToolNode(
 
 function dshToolRef(author: string, plugin: string, tool: string): string {
   return `dsh_migrated__${toolSegment(author)}__${toolSegment(plugin)}__${toolSegment(tool)}`
+}
+
+function migratedModelProviderRef(provider: string | undefined): string | undefined {
+  if (!provider || provider.startsWith("dsh_model__")) return provider
+  const parts = provider.split("/").map((part) => part.trim()).filter(Boolean)
+  if (parts.length < 3 || parts.at(-1)?.toLowerCase() !== "xinference") return provider
+  return `dsh_model__${toolSegment(parts[0])}__${toolSegment(parts[1])}__${toolSegment(parts.at(-1)!)}`
 }
 
 function toolSegment(value: string): string {
@@ -428,9 +435,12 @@ function issueOf(
 }
 
 function convertDependency(dependency: SourceDependencyIR): WorkflowImportDependency {
+  const provider = dependency.kind === "model"
+    ? migratedModelProviderRef(dependency.source.provider)
+    : dependency.source.provider
   return {
     kind: dependency.kind,
-    ...(dependency.source.provider ? { provider: dependency.source.provider } : {}),
+    ...(provider ? { provider } : {}),
     ...(dependency.source.name ? { name: dependency.source.name } : {}),
     requiresRebinding: dependency.kind !== "tool",
   }

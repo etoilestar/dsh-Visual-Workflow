@@ -10,6 +10,7 @@ import { ServiceManager } from './service/index.js';
 import { SchedulerEngine, SchedulerTaskStore } from './scheduler/index.js';
 import { CordisSessionProvider } from './sessions/session-provider.js';
 import { MigratedToolMigrationService, MigratedToolRegistry } from "./migrated-tools/index.js";
+import { MigratedModelRegistry } from "./migrated-models/index.js";
 export declare const VisualWorkflowHostServiceName = "visualWorkflowHost";
 /**
  * 宿主 service：持有解析后的 config、FlowStore 与编排运行时，挂载事件观察、
@@ -43,6 +44,8 @@ export declare class VisualWorkflowHost extends Service {
     readonly toolSwitches: ToolSwitchStore;
     /** Dify 来源包已统一转换后的 DSH 标准工具注册表。 */
     readonly migratedTools: MigratedToolRegistry;
+    /** Dify Model Provider 转换后的 DSH LLM adapter 注册表。 */
+    readonly migratedModels: MigratedModelRegistry;
     /** Dify 包上传、转换与安装能力；执行完成后刷新统一 DSH 工具注册表。 */
     readonly migratedToolMigration: MigratedToolMigrationService;
     /** 新会话创建缝（「开启新会话」一次性动作：创建实例时新建主会话；API 端点使用）。 */

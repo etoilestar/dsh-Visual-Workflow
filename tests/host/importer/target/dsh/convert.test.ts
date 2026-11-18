@@ -55,6 +55,27 @@ describe("Dify to DSH conversion", () => {
     expect(converted.template.sourceImport).toEqual(converted.report)
   })
 
+  test("test_convert_xinference_model_provider_to_migrated_dsh_route", async () => {
+    const source = (await fixture("basic-llm.yml"))
+      .replace("provider: sample", "provider: langgenius/xinference/xinference")
+      .replace("name: sample-model", "name: qwen-chat")
+    const parsed = parseDifyWorkflow(source)
+    const converted = convertDifyWorkflow(parsed.workflow, parsed.capabilities, { id: "tpl-xinference" })
+
+    expect(converted.template.nodes[1]).toMatchObject({
+      kind: "agent",
+      data: {
+        provider: "dsh_model__langgenius__xinference__xinference",
+        model: "qwen-chat",
+      },
+    })
+    expect(converted.report.dependencies).toContainEqual(expect.objectContaining({
+      kind: "model",
+      provider: "dsh_model__langgenius__xinference__xinference",
+      name: "qwen-chat",
+    }))
+  })
+
   test("test_convert_non_adjacent_agent_reference_adds_explicit_context_dependency", async () => {
     const parsed = parseDifyWorkflow(await fixture("basic-llm.yml"))
     const answerIndex = parsed.workflow.nodes.findIndex((node) => node.id === "answer-node")

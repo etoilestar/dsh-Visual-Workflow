@@ -178,7 +178,13 @@ function parsePackage(value: unknown): DifyToolMigrationPackageResult {
     ...(typeof value.version === "string" ? { version: value.version } : {}),
     ...(typeof value.disposition === "string" ? { disposition: value.disposition } : {}),
     ...(Array.isArray(value.tools) ? { tools: value.tools.filter((item): item is string => typeof item === "string") } : {}),
+    ...(Array.isArray(value.providers) ? { providers: value.providers.filter((item): item is string => typeof item === "string") } : {}),
     ...(Array.isArray(value.credentials) ? { credentials: value.credentials.filter((item): item is string => typeof item === "string") } : {}),
+    ...(Array.isArray(value.issues) ? { issues: value.issues.flatMap((item) => {
+      if (!isRecord(item) || typeof item.code !== "string" || typeof item.message !== "string"
+        || !["info", "warning", "error"].includes(String(item.severity))) return []
+      return [{ code: item.code, severity: item.severity as "info" | "warning" | "error", message: item.message }]
+    }) } : {}),
     ...(isRecord(value.error) && typeof value.error.code === "string" && typeof value.error.message === "string"
       ? { error: { code: value.error.code, message: value.error.message } }
       : {}),

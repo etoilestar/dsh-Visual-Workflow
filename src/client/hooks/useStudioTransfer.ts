@@ -179,6 +179,7 @@ export function useStudioTransfer(
     setMigratingDifyTools(true)
     const totals = { discovered: 0, installed: 0, converted: 0, skipped: 0, duplicates: 0, failed: 0 }
     const uploadFailures: string[] = []
+    const migrationNotices: string[] = []
     try {
       for (const file of files) {
         try {
@@ -187,6 +188,9 @@ export function useStudioTransfer(
           for (const key of Object.keys(totals) as Array<keyof typeof totals>) totals[key] += result.summary[key]
           for (const pkg of result.packages) {
             if (pkg.error) uploadFailures.push(`${pkg.sourcePath}: ${pkg.error.message}`)
+            else if (pkg.status === 'skipped' && pkg.issues && pkg.issues.length > 0) {
+              migrationNotices.push(`${pkg.sourcePath}: ${pkg.issues.map((issue) => issue.message).join('; ')}`)
+            }
           }
         } catch (error) {
           totals.failed += 1
@@ -198,6 +202,7 @@ export function useStudioTransfer(
         .replace('{skipped}', String(totals.skipped))
         .replace('{failed}', String(totals.failed))
       notify(totals.failed > 0 ? 'error' : 'success', message)
+      if (migrationNotices.length > 0) notify('info', migrationNotices.slice(0, 3).join('\n'))
       if (uploadFailures.length > 0) toastError(new Error(uploadFailures.slice(0, 3).join('\n')))
     } finally {
       setMigratingDifyTools(false)
